@@ -43,8 +43,15 @@ def extract_digraphs(events_df):
 
 def compute_windows(digraphs_df, window_size=50):
     """
-    Window size = 50 digraphs chosen based on validation testing.
-    Testing showed window_size=50 yields better EER than window_size=30 (24.43% vs ~26%).
+    Splits digraphs stream into sequential non-overlapping windows of window_size digraphs.
+    
+    Window size of 50 digraphs chosen as a reasonable default based on validation testing
+    (24.43% EER on KeyRecs dataset). Alternative sizes may perform differently depending
+    on the dataset and use case.
+    
+    For each window compute a feature vector:
+    dwell_mean, dwell_std, flight_mean, flight_std, typing_speed.
+    typing_speed = window_size / (max_up_time2 - min_down_time1)
     """
     """
     Splits digraphs stream into sequential non-overlapping windows of window_size digraphs.

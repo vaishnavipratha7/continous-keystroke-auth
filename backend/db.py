@@ -1,8 +1,13 @@
 import pymongo
 from bson import ObjectId
+import os
+from dotenv import load_dotenv
 
-# Initialize MongoDB client
-MONGO_URI = "mongodb://localhost:27017/"
+# Load environment variables
+load_dotenv()
+
+# Initialize MongoDB client with environment variable fallback
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 client = pymongo.MongoClient(MONGO_URI)
 db = client["keystroke_auth_db"]
 

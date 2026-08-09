@@ -26,7 +26,8 @@ from backend.auth import (
     hash_password,
     verify_password,
     create_session,
-    get_user_id_from_token
+    get_user_id_from_token,
+    delete_session
 )
 from backend.pipeline import (
     extract_digraphs,
@@ -41,13 +42,20 @@ from backend.pipeline import (
 app = FastAPI(title="Continuous Keystroke Authentication API")
 
 # Enable CORS for frontend integration
+# Allow configurable origin via environment variable
+ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/health")
+async def health():
+    """Health check endpoint for monitoring."""
+    return {"status": "ok"}
 
 # Pydantic Schemas
 class UserAuthSchema(BaseModel):
@@ -82,14 +90,19 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)):
 @app.post("/signup")
 async def signup(credentials: UserAuthSchema):
     username = credentials.username.strip()
-    if not username or not credentials.password:
-        raise HTTPException(status_code=400, detail="Username and password are required")
+    password = credentials.password
+    
+    # Validation
+    if not username or username.isspace():
+        raise HTTPException(status_code=400, detail="Username cannot be empty or only whitespace")
+    if not password or len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
         
     existing = get_user_by_username(username)
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
         
-    pwd_hash = hash_password(credentials.password)
+    pwd_hash = hash_password(password)
     users_col.insert_one({
         "username": username,
         "password_hash": pwd_hash,
@@ -110,6 +123,14 @@ async def login(credentials: UserAuthSchema):
         "username": username,
         "user_id": str(user["_id"])
     }
+
+@app.post("/logout")
+async def logout(authorization: Optional[str] = Header(None)):
+    """Delete the current session token."""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+        delete_session(token)
+    return {"message": "Logged out successfully"}
 
 @app.post("/enroll/keystrokes")
 async def enroll_keystrokes(batch: KeystrokeBatchSchema, user_id: str = Depends(get_current_user_id)):
@@ -160,11 +181,22 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
             status_code=400,
             detail=f"Could not construct any windows from typing. Keystrokes may be too sparse or filtered as outliers. Type steadily and continuously."
         )
+    
+    # Split enrollment into training (80%) and calibration (20%) subsets
+    split_idx = int(len(windows_df) * 0.8)
+    train_windows = windows_df.iloc[:split_idx]
+    calibrate_windows = windows_df.iloc[split_idx:]
+    
+    if len(train_windows) < 1 or len(calibrate_windows) < 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient windows for training and calibration. Need at least 2 windows. Have {len(windows_df)} windows."
+        )
         
-    # Train Isolation Forest
+    # Train Isolation Forest on training subset
     try:
-        model = train_user_model(windows_df)
-        low_cut, high_cut = calibrate_thresholds(model, windows_df)
+        model = train_user_model(train_windows)
+        low_cut, high_cut = calibrate_thresholds(model, calibrate_windows)
         
         # Check if thresholds are equal (can happen with very little data)
         if low_cut >= high_cut:
@@ -192,11 +224,22 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
         return {
             "message": "Model trained and saved successfully",
             "windows_count": len(windows_df),
+            "training_windows": len(train_windows),
+            "calibration_windows": len(calibrate_windows),
             "low_threshold": low_cut,
             "high_threshold": high_cut
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
+
+@app.get("/enroll/status")
+async def enroll_status(user_id: str = Depends(get_current_user_id)):
+    """Check if user has a trained biometric model."""
+    model_doc = user_models_col.find_one({"user_id": user_id})
+    return {
+        "has_model": model_doc is not None,
+        "enrollment_complete": model_doc is not None
+    }
 
 @app.post("/session/keystrokes")
 async def session_keystrokes(batch: KeystrokeBatchSchema, user_id: str = Depends(get_current_user_id)):

@@ -1,6 +1,6 @@
 # Continuous Keystroke Biometric Authentication System
 
-A real-time continuous authentication system that monitors typing dynamics to detect session hijacking attempts. This system addresses gaps in the [Bours & Mondal 2023 KeyRecs dataset paper](https://link.springer.com/article/10.1007/s00521-022-07472-0) by implementing continuous (not just initial) authentication with adaptive learning.
+A real-time continuous authentication system that monitors typing dynamics to detect session hijacking attempts. This system extends the work of [Martins et al. (2025)](https://doi.org/10.1007/s42452-025-07449-5) on keystroke dynamics for intelligent biometric authentication, implementing continuous (not just initial) authentication with adaptive learning and session hijacking detection.
 
 ## Key Features
 
@@ -148,13 +148,17 @@ Session flagged as "hijacked" after **3 consecutive medium/high risk windows** t
 
 ## Gap Filling
 
-This system addresses key gaps in the original KeyRecs paper:
+This system extends the work of Martins et al. (2025) in keystroke dynamics authentication by addressing several key gaps:
 
-1. **Continuous vs. Initial**: Monitors entire session, not just login
+1. **Continuous vs. Initial**: Monitors entire session, not just login authentication
 2. **Adaptive Learning**: Model improves from confirmed legitimate sessions
 3. **Real-time Detection**: Live monitoring with <5 second latency
-4. **Explainability**: SHAP values explain each decision
-5. **User-facing Dashboard**: Transparent risk visualization
+4. **Explainability**: SHAP values explain each decision for transparency
+5. **User-facing Dashboard**: Transparent risk visualization for end users
+
+### Dataset
+
+This implementation uses the KeyRecs free-text dataset from [Bours & Mondal (2023)](https://link.springer.com/article/10.1007/s00521-022-07472-0) for training and validation.
 
 ## Project Structure
 
@@ -197,6 +201,14 @@ This project uses the KeyRecs dataset from [Bours & Mondal, 2023], licensed unde
 
 If you use this system, please cite:
 
+**Base Paper**:
+```
+Martins, J.P., Soares, S.C., Pinho, A.J. et al. Keystroke dynamics for intelligent biometric 
+authentication with machine learning. Discov Appl Sci 7, 34 (2025). 
+https://doi.org/10.1007/s42452-025-07449-5
+```
+
+**Dataset**:
 ```
 Bours, P., Mondal, S. A dataset for exploring user authentication through free-text keystroke dynamics. 
 Neural Comput & Applic 35, 16077–16093 (2023). https://doi.org/10.1007/s00521-022-07472-0

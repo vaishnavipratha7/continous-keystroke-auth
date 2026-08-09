@@ -1,25 +1,44 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts';
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
 export default function App() {
-  const [page, setPage] = useState('login'); // login, signup, enrollment, session
+  const [page, setPage] = useState('landing'); // landing, login, signup, enrollment, session
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [username, setUsername] = useState(localStorage.getItem('username') || null);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
+  const [connectionError, setConnectionError] = useState(false);
 
   useEffect(() => {
     const savedToken = localStorage.getItem('token');
     if (savedToken) {
       setPage('session');
     }
+    
+    // Global network error handler
+    window.addEventListener('offline', () => setConnectionError(true));
+    window.addEventListener('online', () => setConnectionError(false));
+    
+    return () => {
+      window.removeEventListener('offline', () => setConnectionError(true));
+      window.removeEventListener('online', () => setConnectionError(false));
+    };
   }, []);
 
   // Authentication helper
   const handleLogout = () => {
+    const savedToken = localStorage.getItem('token');
+    if (savedToken) {
+      // Call backend logout endpoint
+      fetch(`${API_BASE}/logout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${savedToken}` }
+      }).catch(err => console.error('Logout request failed:', err));
+    }
+    
     localStorage.removeItem('token');
     localStorage.removeItem('username');
     setToken(null);
@@ -32,12 +51,41 @@ export default function App() {
     localStorage.setItem('username', user);
     setToken(token);
     setUsername(user);
-    setPage('enrollment');
+    
+    // Check if user has already completed enrollment
+    fetch(`${API_BASE}/enroll/status`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.enrollment_complete) {
+          setPage('session');
+        } else {
+          setPage('enrollment');
+        }
+      })
+      .catch(err => {
+        console.error('Failed to check enrollment status:', err);
+        setPage('enrollment'); // Default to enrollment on error
+      });
   };
 
   return (
     <div>
       <Navbar username={username} handleLogout={handleLogout} page={page} setPage={setPage} token={token} />
+      <ProgressIndicator page={page} token={token} />
+      
+      {/* Connection error banner */}
+      {connectionError && (
+        <div style={{
+          position: 'fixed', top: '70px', left: 0, right: 0, zIndex: 1000,
+          background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', 
+          padding: '12px 20px', color: '#f87171', fontSize: '0.9rem', textAlign: 'center'
+        }}>
+          ⚠️ Connection lost. Check your network connection or try reloading.
+        </div>
+      )}
+      
       <main style={{ minHeight: 'calc(100vh - 70px)' }}>
         {error && (
           <div style={{
@@ -59,11 +107,121 @@ export default function App() {
           </div>
         )}
 
+        {page === 'landing' && <LandingView setPage={setPage} />}
         {page === 'login' && <LoginView handleLoginSuccess={handleLoginSuccess} setPage={setPage} setError={setError} />}
         {page === 'signup' && <SignupView setPage={setPage} setError={setError} setInfo={setInfo} />}
         {page === 'enrollment' && <EnrollmentView token={token} setPage={setPage} setError={setError} />}
         {page === 'session' && <SessionView token={token} username={username} setError={setError} />}
       </main>
+    </div>
+  );
+}
+
+// LANDING VIEW
+function LandingView({ setPage }) {
+  return (
+    <div style={{ 
+      minHeight: 'calc(100vh - 70px)', 
+      display: 'flex', 
+      flexDirection: 'column', 
+      alignItems: 'center', 
+      justifyContent: 'center',
+      padding: '40px 20px',
+      textAlign: 'center'
+    }} className="fade-in">
+      <div style={{ maxWidth: '900px' }}>
+        <h1 style={{ 
+          fontSize: '2.5rem', 
+          marginBottom: '20px', 
+          fontWeight: 800,
+          background: 'linear-gradient(135deg, var(--color-primary) 0%, var(--color-secure) 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          backgroundClip: 'text'
+        }}>
+          Continuous Keystroke Authentication
+        </h1>
+        
+        <p style={{ 
+          fontSize: '1.25rem', 
+          color: 'var(--color-text-main)', 
+          marginBottom: '60px',
+          lineHeight: '1.6'
+        }}>
+          Your typing rhythm is as unique as your fingerprint — we use it to detect when someone else takes over your session.
+        </p>
+
+        {/* 3-Step Visual */}
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
+          gap: '30px', 
+          marginBottom: '60px' 
+        }}>
+          <div className="glass-panel" style={{ padding: '30px', textAlign: 'center' }}>
+            <div style={{ 
+              fontSize: '3rem', 
+              marginBottom: '15px',
+              filter: 'drop-shadow(0 0 8px rgba(99, 102, 241, 0.4))'
+            }}>⌨️</div>
+            <h3 style={{ fontSize: '1.1rem', marginBottom: '10px', fontWeight: 600 }}>1. Enroll Your Typing</h3>
+            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem', lineHeight: '1.5' }}>
+              Type a short passage so we can learn your unique rhythm
+            </p>
+          </div>
+
+          <div className="glass-panel" style={{ padding: '30px', textAlign: 'center' }}>
+            <div style={{ 
+              fontSize: '3rem', 
+              marginBottom: '15px',
+              filter: 'drop-shadow(0 0 8px rgba(16, 185, 129, 0.4))'
+            }}>✓</div>
+            <h3 style={{ fontSize: '1.1rem', marginBottom: '10px', fontWeight: 600 }}>2. Type Normally</h3>
+            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem', lineHeight: '1.5' }}>
+              Work as usual — we monitor your typing in the background
+            </p>
+          </div>
+
+          <div className="glass-panel" style={{ padding: '30px', textAlign: 'center' }}>
+            <div style={{ 
+              fontSize: '3rem', 
+              marginBottom: '15px',
+              filter: 'drop-shadow(0 0 8px rgba(239, 68, 68, 0.4))'
+            }}>🔒</div>
+            <h3 style={{ fontSize: '1.1rem', marginBottom: '10px', fontWeight: 600 }}>3. Automatic Detection</h3>
+            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem', lineHeight: '1.5' }}>
+              Sessions lock automatically if someone else takes over
+            </p>
+          </div>
+        </div>
+
+        {/* CTA Buttons */}
+        <div style={{ display: 'flex', gap: '20px', justifyContent: 'center', flexWrap: 'wrap' }}>
+          <button 
+            onClick={() => setPage('signup')} 
+            className="btn-primary" 
+            style={{ width: 'auto', padding: '14px 40px', fontSize: '1.05rem' }}
+          >
+            Get Started
+          </button>
+          <button 
+            onClick={() => setPage('login')} 
+            className="btn-secondary" 
+            style={{ width: 'auto', padding: '14px 40px', fontSize: '1.05rem' }}
+          >
+            Sign In
+          </button>
+        </div>
+
+        <p style={{ 
+          marginTop: '40px', 
+          fontSize: '0.85rem', 
+          color: 'var(--color-text-muted)',
+          lineHeight: '1.6'
+        }}>
+          Based on research by <a href="https://doi.org/10.1007/s42452-025-07449-5" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'none' }}>Martins et al. (2025)</a>
+        </p>
+      </div>
     </div>
   );
 }
@@ -77,7 +235,7 @@ function Navbar({ username, handleLogout, page, setPage, token }) {
       background: 'rgba(11, 15, 25, 0.8)', backdropFilter: 'blur(10px)',
       position: 'sticky', top: 0, zIndex: 100
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }} onClick={() => token ? setPage('session') : setPage('login')}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }} onClick={() => token ? setPage('session') : setPage('landing')}>
         <div style={{
           width: '32px', height: '32px', borderRadius: '8px',
           background: 'linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%)',
@@ -88,7 +246,7 @@ function Navbar({ username, handleLogout, page, setPage, token }) {
         </h2>
       </div>
 
-      {token ? (
+      {token && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
           <span style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>
             User: <strong style={{ color: 'var(--color-text-main)' }}>{username}</strong>
@@ -109,13 +267,105 @@ function Navbar({ username, handleLogout, page, setPage, token }) {
             Logout
           </button>
         </div>
-      ) : (
+      )}
+      {!token && (
         <div style={{ display: 'flex', gap: '12px' }}>
-          <button onClick={() => setPage('login')} className="btn-secondary" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>Login</button>
-          <button onClick={() => setPage('signup')} className="btn-primary" style={{ padding: '6px 16px', fontSize: '0.85rem', width: 'auto', boxShadow: 'none' }}>Sign Up</button>
+          {page !== 'landing' && (
+            <button onClick={() => setPage('landing')} className="btn-secondary" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>
+              ← Home
+            </button>
+          )}
+          {page !== 'login' && (
+            <button onClick={() => setPage('login')} className="btn-secondary" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>Login</button>
+          )}
+          {page !== 'signup' && (
+            <button onClick={() => setPage('signup')} className="btn-primary" style={{ padding: '6px 16px', fontSize: '0.85rem', width: 'auto', boxShadow: 'none' }}>Sign Up</button>
+          )}
+        </div>
+      )}
+      {!token && (
+        <div style={{ display: 'flex', gap: '12px' }}>
+          {page !== 'landing' && (
+            <button onClick={() => setPage('landing')} className="btn-secondary" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>
+              ← Home
+            </button>
+          )}
+          {page !== 'login' && (
+            <button onClick={() => setPage('login')} className="btn-secondary" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>Login</button>
+          )}
+          {page !== 'signup' && (
+            <button onClick={() => setPage('signup')} className="btn-primary" style={{ padding: '6px 16px', fontSize: '0.85rem', width: 'auto', boxShadow: 'none' }}>Sign Up</button>
+          )}
         </div>
       )}
     </nav>
+  );
+}
+
+// PROGRESS INDICATOR
+function ProgressIndicator({ page, token }) {
+  if (!token && page !== 'signup' && page !== 'login') return null;
+  
+  const steps = [
+    { id: 'account', label: 'Account', pages: ['signup', 'login'] },
+    { id: 'enroll', label: 'Enroll', pages: ['enrollment'] },
+    { id: 'monitor', label: 'Monitor', pages: ['session'] }
+  ];
+  
+  const currentStepIndex = steps.findIndex(step => step.pages.includes(page));
+  
+  return (
+    <div style={{
+      background: 'rgba(17, 24, 39, 0.6)',
+      borderBottom: '1px solid var(--border-color)',
+      padding: '12px 30px',
+      display: 'flex',
+      justifyContent: 'center',
+      gap: '40px'
+    }}>
+      {steps.map((step, index) => {
+        const isActive = index === currentStepIndex;
+        const isComplete = index < currentStepIndex;
+        
+        return (
+          <div key={step.id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: '28px',
+              height: '28px',
+              borderRadius: '50%',
+              background: isActive ? 'var(--color-primary)' : isComplete ? 'var(--color-secure)' : 'rgba(255,255,255,0.1)',
+              border: isActive ? '2px solid var(--color-primary)' : isComplete ? '2px solid var(--color-secure)' : '2px solid rgba(255,255,255,0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              color: isActive || isComplete ? '#fff' : 'var(--color-text-muted)',
+              transition: 'all 0.3s ease'
+            }}>
+              {isComplete ? '✓' : index + 1}
+            </div>
+            <span style={{
+              fontSize: '0.9rem',
+              fontWeight: isActive ? 600 : 400,
+              color: isActive ? 'var(--color-text-main)' : isComplete ? 'var(--color-secure)' : 'var(--color-text-muted)',
+              transition: 'all 0.3s ease'
+            }}>
+              {step.label}
+            </span>
+            {index < steps.length - 1 && (
+              <div style={{
+                width: '30px',
+                height: '2px',
+                background: isComplete ? 'var(--color-secure)' : 'rgba(255,255,255,0.1)',
+                marginLeft: '20px',
+                transition: 'all 0.3s ease'
+              }}></div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -307,7 +557,6 @@ function EnrollmentView({ token, setPage, setError }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
-  const [repetitionsCount, setRepetitionsCount] = useState(0);
   
   const pressedKeysRef = useRef({});
 
@@ -340,25 +589,18 @@ function EnrollmentView({ token, setPage, setError }) {
 
   // Detect when target sentence is fully typed
   const handleTextChange = (e) => {
-    const val = e.target.value;
-    setTypedText(val);
-
-    // If typed text is roughly the length of target text
-    if (val.trim() === targetText.trim()) {
-      setRepetitionsCount(prev => prev + 1);
-      setTypedText(''); // reset textarea for next run
-      setProgressMsg(`Repetition ${repetitionsCount + 1} completed! Keep typing.`);
-    }
+    setTypedText(e.target.value);
   };
 
   const handleEnrollSubmit = async () => {
     if (events.length < 350) {
-      setError(`Please type more. Currently have ${events.length} events, need at least 350 for stable model calibration.`);
+      const remaining = 350 - events.length;
+      setError(`Almost there! Type ${remaining} more keys to complete enrollment (need 350 total for accurate baseline).`);
       return;
     }
     
     setLoading(true);
-    setProgressMsg("Sending keystroke dynamics events batch to server...");
+    setProgressMsg("Uploading your typing data to the server...");
     
     try {
       // 1. Submit raw events
@@ -377,7 +619,7 @@ function EnrollmentView({ token, setPage, setError }) {
       }
       
       // 2. Train model
-      setProgressMsg("Analyzing typing signature. Training Isolation Forest model...");
+      setProgressMsg("Building your unique biometric signature...");
       const trainRes = await fetch(`${API_BASE}/enroll/train`, {
         method: 'POST',
         headers: {
@@ -390,7 +632,7 @@ function EnrollmentView({ token, setPage, setError }) {
         throw new Error(trainData.detail || "Failed to train biometric model. Please type more naturally.");
       }
       
-      setProgressMsg("Biometric signature successfully enrolled!");
+      setProgressMsg("Success! Your typing signature is ready.");
       setTimeout(() => {
         setPage('session');
       }, 1500);
@@ -404,7 +646,6 @@ function EnrollmentView({ token, setPage, setError }) {
   const handleReset = () => {
     setTypedText('');
     setEvents([]);
-    setRepetitionsCount(0);
     setProgressMsg('');
     setError('');
   };
@@ -413,11 +654,14 @@ function EnrollmentView({ token, setPage, setError }) {
   const progressPercent = Math.min(100, Math.round((events.length / minKeystrokes) * 100));
 
   return (
-    <div style={{ maxWidth: '800px', margin: '40px auto', padding: '0 20px' }} className="fade-in">
-      <div className="glass-panel" style={{ padding: '30px' }}>
-        <h2 style={{ fontSize: '1.75rem', marginBottom: '10px' }}>Enroll Biometric Signature</h2>
-        <p style={{ color: 'var(--color-text-muted)', fontSize: '0.95rem', marginBottom: '24px' }}>
-          To build your custom keystroke profile, type the passage below <strong>2 to 3 times</strong>. Type at your normal, comfortable pace.
+    <div style={{ maxWidth: '800px', margin: 'var(--space-2xl) auto', padding: '0 var(--space-lg)' }} className="fade-in">
+      <div className="glass-panel" style={{ padding: 'var(--space-xl)' }}>
+        <h2 style={{ fontSize: 'var(--text-3xl)', marginBottom: 'var(--space-sm)' }}>Enroll Biometric Signature</h2>
+        <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-base)', marginBottom: 'var(--space-sm)' }}>
+          We're learning your unique typing rhythm — how long you hold keys and the pauses between them — so we can recognize you later and detect if someone else takes over your session.
+        </p>
+        <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-base)', marginBottom: 'var(--space-lg)' }}>
+          Type the passage below <strong>2 to 3 times</strong> at your normal, comfortable pace. The more naturally you type, the better we can learn your pattern.
         </p>
 
         {/* TARGET PASSAGE */}
@@ -448,12 +692,19 @@ function EnrollmentView({ token, setPage, setError }) {
         </div>
 
         {/* PROGRESS METRICS */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-xs)', fontSize: 'var(--text-sm)' }}>
           <span style={{ color: 'var(--color-text-muted)' }}>
-            Total keystrokes recorded: <strong style={{ color: 'var(--color-text-main)' }}>{events.length}</strong>
+            Keystokes: <strong style={{ color: 'var(--color-text-main)' }}>{events.length} / {minKeystrokes}</strong>
+            {events.length < minKeystrokes && (
+              <span style={{ color: 'var(--color-primary)', marginLeft: 'var(--space-xs)' }}>
+                ({minKeystrokes - events.length} more needed)
+              </span>
+            )}
           </span>
           <span style={{ color: 'var(--color-text-muted)' }}>
-            Passages completed: <strong style={{ color: 'var(--color-text-main)' }}>{repetitionsCount}</strong>
+            Progress: <strong style={{ color: progressPercent === 100 ? 'var(--color-secure)' : 'var(--color-text-main)' }}>
+              {progressPercent}%
+            </strong>
           </span>
         </div>
 
@@ -514,6 +765,8 @@ function SessionView({ token, username, setError }) {
   const [shapData, setShapData] = useState(null);
   const [explainLoading, setExplainLoading] = useState(false);
   const [ending, setEnding] = useState(false);
+  const [endSessionMessage, setEndSessionMessage] = useState('');
+  const [sessionSummary, setSessionSummary] = useState(null);
   
   const localQueueRef = useRef([]);
   const pressedKeysRef = useRef({});
@@ -617,6 +870,7 @@ function SessionView({ token, username, setError }) {
   // Triggered when user clicks End Session
   const handleEndSession = async () => {
     setEnding(true);
+    setEndSessionMessage('');
     // Flush remaining keys in queue
     if (localQueueRef.current.length > 0) {
       await sendBatch();
@@ -628,11 +882,17 @@ function SessionView({ token, username, setError }) {
       });
       const data = await res.json();
       if (res.ok) {
-        alert(data.message + (data.model_retrained ? " (Model adapted to new clean samples and retrained!)" : ""));
-        window.location.reload();
+        // Show summary instead of immediate reload
+        setSessionSummary({
+          totalWindows: scoreHistory.length,
+          finalRiskState: riskState,
+          modelRetrained: data.model_retrained || false,
+          message: data.message || 'Session ended successfully'
+        });
       }
     } catch (err) {
       console.error(err);
+      setError('Failed to end session');
     } finally {
       setEnding(false);
     }
@@ -700,22 +960,174 @@ function SessionView({ token, username, setError }) {
     }
   };
 
-  // Map state to human-readable tag style
+  // Map state to human-readable tag style and full explanation
   const getRiskStatusLabel = () => {
     switch (riskState) {
-      case 'low': return { text: 'SECURE', className: 'badge-secure' };
-      case 'medium': return { text: 'WARNING: DYNAMICS SHIFT', className: 'badge-warning' };
-      case 'high': return { text: 'HIGH RISK ALERT', className: 'badge-danger' };
-      case 'flagged': return { text: 'CRITICAL: HIJACK DETECTED (LOCKED)', className: 'badge-danger' };
-      case 'initializing': return { text: 'INITIALIZING', className: 'badge-collecting' };
-      default: return { text: 'COLLECTING DATA', className: 'badge-collecting' };
+      case 'low': 
+        return { 
+          text: 'SECURE', 
+          className: 'badge-secure',
+          explanation: 'Your typing matches your enrolled pattern. Everything looks normal and secure.'
+        };
+      case 'medium': 
+        return { 
+          text: 'CAUTION', 
+          className: 'badge-warning',
+          explanation: 'We detected some variance in your typing rhythm. This could be normal tiredness or typing in a different position. Keep typing — we\'re monitoring closely.'
+        };
+      case 'high': 
+        return { 
+          text: 'HIGH ALERT', 
+          className: 'badge-danger',
+          explanation: 'Your typing pattern is significantly different from your baseline. If you\'re tired or distracted, this is normal. If someone else is using your keyboard, they will be locked out shortly.'
+        };
+      case 'flagged': 
+        return { 
+          text: 'SESSION LOCKED', 
+          className: 'badge-danger',
+          explanation: 'Session terminated due to suspicious typing pattern. Three consecutive windows showed typing that didn\'t match your enrolled baseline.'
+        };
+      case 'initializing': 
+        return { 
+          text: 'INITIALIZING', 
+          className: 'badge-collecting',
+          explanation: 'Collecting your first keystrokes to start monitoring. Type at least 50 keys to begin authentication.'
+        };
+      default: 
+        return { 
+          text: 'COLLECTING DATA', 
+          className: 'badge-collecting',
+          explanation: 'Building up enough typing data to make our first security check.'
+        };
     }
   };
 
   const statusLabel = getRiskStatusLabel();
 
+  // Show session summary if available
+  if (sessionSummary) {
+    return (
+      <div style={{ maxWidth: '700px', margin: '60px auto', padding: '0 20px' }} className="fade-in">
+        <div className="glass-panel" style={{ padding: '40px', textAlign: 'center' }}>
+          <div style={{
+            width: '80px', height: '80px', borderRadius: '50%',
+            background: 'rgba(16, 185, 129, 0.2)', border: '2px solid var(--color-secure)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '2.5rem', margin: '0 auto 24px'
+          }}>✓</div>
+          
+          <h2 style={{ fontSize: '1.75rem', marginBottom: '16px', fontWeight: 700 }}>
+            Session Summary
+          </h2>
+          
+          <p style={{ color: 'var(--color-text-muted)', fontSize: '1rem', marginBottom: '32px' }}>
+            {sessionSummary.message}
+          </p>
+          
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
+            gap: '20px', 
+            marginBottom: '32px',
+            textAlign: 'left'
+          }}>
+            <div style={{ 
+              background: 'rgba(0,0,0,0.2)', 
+              padding: '20px', 
+              borderRadius: '8px',
+              border: '1px solid var(--border-color)'
+            }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Windows Monitored
+              </div>
+              <div style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--color-primary)' }}>
+                {sessionSummary.totalWindows}
+              </div>
+            </div>
+            
+            <div style={{ 
+              background: 'rgba(0,0,0,0.2)', 
+              padding: '20px', 
+              borderRadius: '8px',
+              border: '1px solid var(--border-color)'
+            }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Final Status
+              </div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-secure)', textTransform: 'uppercase' }}>
+                {sessionSummary.finalRiskState}
+              </div>
+            </div>
+            
+            <div style={{ 
+              background: 'rgba(0,0,0,0.2)', 
+              padding: '20px', 
+              borderRadius: '8px',
+              border: '1px solid var(--border-color)'
+            }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Model Status
+              </div>
+              <div style={{ fontSize: '1.1rem', fontWeight: 600, color: sessionSummary.modelRetrained ? 'var(--color-secure)' : 'var(--color-text-muted)' }}>
+                {sessionSummary.modelRetrained ? '✓ Retrained' : 'No Update'}
+              </div>
+            </div>
+          </div>
+          
+          <div style={{ 
+            background: 'rgba(99, 102, 241, 0.1)', 
+            border: '1px solid rgba(99, 102, 241, 0.3)',
+            borderRadius: '8px',
+            padding: '20px',
+            marginBottom: '32px',
+            textAlign: 'left'
+          }}>
+            <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '8px', color: 'var(--color-primary)' }}>
+              What Happens Next?
+            </h4>
+            <p style={{ fontSize: '0.9rem', color: 'var(--color-text-muted)', lineHeight: '1.6', margin: 0 }}>
+              {sessionSummary.modelRetrained 
+                ? 'Your biometric model has been updated with new typing data from this session, improving future detection accuracy. Your next session will use this refined baseline.'
+                : 'Your biometric model remains unchanged. Start a new session to continue monitoring, or re-enroll to update your typing baseline.'
+              }
+            </p>
+          </div>
+          
+          <div style={{ display: 'flex', gap: '15px', justifyContent: 'center' }}>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="btn-primary"
+              style={{ width: 'auto', padding: '12px 32px' }}
+            >
+              Start New Session
+            </button>
+            <button 
+              onClick={() => setSessionSummary(null)} 
+              className="btn-secondary"
+              style={{ width: 'auto', padding: '12px 32px' }}
+            >
+              View Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="dashboard-grid fade-in">
+      
+      {/* End session success message */}
+      {endSessionMessage && (
+        <div style={{
+          position: 'fixed', top: '20px', left: '50%', transform: 'translateX(-50%)',
+          maxWidth: '500px', padding: '12px 20px', zIndex: 2000,
+          background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', 
+          borderRadius: '8px', color: '#34d399', fontSize: '0.9rem', textAlign: 'center'
+        }} className="fade-in">
+          {endSessionMessage}
+        </div>
+      )}
       
       {/* LEFT COLUMN: ACTIVE VERIFICATION AREA */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -808,38 +1220,66 @@ function SessionView({ token, username, setError }) {
         
         {/* RISK STATUS CARD */}
         <div className="glass-panel" style={{
-          padding: '24px', textAlign: 'center',
+          padding: '30px', textAlign: 'center',
           borderColor: riskState === 'flagged' ? 'var(--color-danger)' : 
                        riskState === 'low' ? 'var(--color-secure)' : 
                        riskState === 'medium' ? 'var(--color-warning)' : 'var(--border-color)'
         }}>
-          <h4 style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>
-            Active Security Level
+          <h4 style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '12px', fontWeight: 600 }}>
+            Security Status
           </h4>
           <div className={`${statusLabel.className}`} style={{
             display: 'inline-block', padding: '10px 24px', borderRadius: '30px',
-            fontSize: '1.1rem', fontWeight: 800, letterSpacing: '0.02em', marginBottom: '10px'
+            fontSize: '1rem', fontWeight: 800, letterSpacing: '0.02em', marginBottom: '16px'
           }}>
             {statusLabel.text}
           </div>
-          <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
-            {riskState === 'initializing' && "Type at least 50 keys to authenticate session dynamics..."}
-            {riskState === 'low' && "Secure keystroke profile matched."}
-            {riskState === 'medium' && "Typing rhythm variance detected. Verifying profile..."}
-            {riskState === 'flagged' && "Lockdown triggered. 3 consecutive abnormal windows scored."}
+          
+          {/* Primary status explanation - more prominent */}
+          <p style={{ 
+            fontSize: 'var(--text-lg)', 
+            color: 'var(--color-text-main)', 
+            lineHeight: '1.6',
+            fontWeight: 500,
+            marginBottom: 'var(--space-sm)'
+          }}>
+            {statusLabel.explanation}
+          </p>
+          
+          {/* Secondary metadata */}
+          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+            {scoreHistory.length > 0 ? `${scoreHistory.length} windows analyzed` : 'Starting analysis...'}
           </p>
         </div>
 
         {/* SCORE HISTORY LIVE CHART */}
-        <div className="glass-panel" style={{ padding: '24px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>Window Verification Chart</h3>
+        <div className="glass-panel" style={{ padding: 'var(--space-lg)', flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <h3 style={{ fontSize: 'var(--text-base)', marginBottom: 'var(--space-sm)', color: 'var(--color-text-muted)', fontWeight: 600 }}>Technical Details</h3>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-md)' }}>
+            Real-time anomaly scores from the Isolation Forest model
+          </p>
           
           {scoreHistory.length === 0 ? (
             <div style={{
               flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: 'var(--color-text-muted)', fontSize: '0.9rem', textAlign: 'center', minHeight: '250px'
+              color: 'var(--color-text-muted)', fontSize: 'var(--text-base)', textAlign: 'center', minHeight: '250px',
+              flexDirection: 'column', gap: 'var(--space-sm)'
             }}>
-              No windows evaluated yet.<br />Keep typing to generate the first window.
+              <div>Start typing in the text area to begin authentication.</div>
+              <div style={{ fontSize: 'var(--text-sm)' }}>
+                Each window requires ~50 keystrokes to analyze.
+              </div>
+            </div>
+          ) : scoreHistory.length < 3 ? (
+            <div style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--color-text-muted)', fontSize: 'var(--text-base)', textAlign: 'center', minHeight: '250px',
+              flexDirection: 'column', gap: 'var(--space-sm)'
+            }}>
+              <div>Great! Building your chart...</div>
+              <div style={{ fontSize: 'var(--text-sm)' }}>
+                {scoreHistory.length} window{scoreHistory.length !== 1 ? 's' : ''} analyzed (3+ needed for visualization)
+              </div>
             </div>
           ) : (
             <>
@@ -956,9 +1396,62 @@ function SessionView({ token, username, setError }) {
 
             {shapData && (
               <div>
-                <h4 style={{ fontSize: '0.95rem', color: 'var(--color-text-muted)', marginBottom: '15px' }}>
-                  Window index: {shapData.window_index + 1} | Attributions contributing to anomaly:
+                <h4 style={{ fontSize: '0.95rem', color: 'var(--color-text-muted)', marginBottom: '10px' }}>
+                  Window index: {shapData.window_index + 1}
                 </h4>
+                
+                {/* Auto-generated plain-language headline */}
+                {(() => {
+                  // Find feature with highest absolute SHAP value
+                  const features = Object.keys(shapData.shap_values);
+                  const topFeature = features.reduce((max, feat) => 
+                    Math.abs(shapData.shap_values[feat]) > Math.abs(shapData.shap_values[max]) ? feat : max
+                  );
+                  const topValue = shapData.shap_values[topFeature];
+                  const featureValue = shapData.feature_values[topFeature];
+                  
+                  // Generate plain-language explanation based on feature
+                  let explanation = '';
+                  if (topFeature.includes('dwell')) {
+                    explanation = topValue > 0 
+                      ? `This window was flagged mainly because your key hold times (${(featureValue * 1000).toFixed(0)}ms average) were unusually different from your enrolled baseline.`
+                      : `Your key hold times (${(featureValue * 1000).toFixed(0)}ms average) were consistent with your normal pattern.`;
+                  } else if (topFeature.includes('flight')) {
+                    explanation = topValue > 0
+                      ? `This window was flagged mainly because the time between keystrokes (${(featureValue * 1000).toFixed(0)}ms average) differed significantly from your typical rhythm.`
+                      : `The time between your keystrokes (${(featureValue * 1000).toFixed(0)}ms average) matched your enrolled pattern well.`;
+                  } else if (topFeature.includes('speed')) {
+                    explanation = topValue > 0
+                      ? `This window was flagged mainly because your typing speed was unusually different from your enrolled baseline.`
+                      : `Your typing speed was consistent with your normal pattern.`;
+                  } else if (topFeature.includes('std') || topFeature.includes('variance')) {
+                    explanation = topValue > 0
+                      ? `This window was flagged mainly because your typing rhythm was more variable than usual.`
+                      : `Your typing rhythm variability was normal.`;
+                  } else {
+                    explanation = topValue > 0
+                      ? `This window was flagged mainly due to an unusual pattern in ${topFeature.replace(/_/g, ' ')}.`
+                      : `The ${topFeature.replace(/_/g, ' ')} feature matched your normal pattern.`;
+                  }
+                  
+                  return (
+                    <div style={{
+                      background: 'rgba(99, 102, 241, 0.1)',
+                      border: '1px solid rgba(99, 102, 241, 0.3)',
+                      borderRadius: '8px',
+                      padding: '16px',
+                      marginBottom: '20px'
+                    }}>
+                      <p style={{ fontSize: '1rem', color: 'var(--color-text-main)', lineHeight: '1.6', margin: 0 }}>
+                        {explanation}
+                      </p>
+                    </div>
+                  );
+                })()}
+                
+                <h5 style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Feature Attributions:
+                </h5>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                   {Object.keys(shapData.shap_values).map(feat => {

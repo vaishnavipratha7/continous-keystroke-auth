@@ -212,15 +212,6 @@ function LandingView({ setPage }) {
             Sign In
           </button>
         </div>
-
-        <p style={{ 
-          marginTop: '40px', 
-          fontSize: '0.85rem', 
-          color: 'var(--color-text-muted)',
-          lineHeight: '1.6'
-        }}>
-          Based on research by <a href="https://doi.org/10.1007/s42452-025-07449-5" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'none' }}>Martins et al. (2025)</a>
-        </p>
       </div>
     </div>
   );
@@ -266,21 +257,6 @@ function Navbar({ username, handleLogout, page, setPage, token }) {
           <button onClick={handleLogout} className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
             Logout
           </button>
-        </div>
-      )}
-      {!token && (
-        <div style={{ display: 'flex', gap: '12px' }}>
-          {page !== 'landing' && (
-            <button onClick={() => setPage('landing')} className="btn-secondary" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>
-              ← Home
-            </button>
-          )}
-          {page !== 'login' && (
-            <button onClick={() => setPage('login')} className="btn-secondary" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>Login</button>
-          )}
-          {page !== 'signup' && (
-            <button onClick={() => setPage('signup')} className="btn-primary" style={{ padding: '6px 16px', fontSize: '0.85rem', width: 'auto', boxShadow: 'none' }}>Sign Up</button>
-          )}
         </div>
       )}
       {!token && (
@@ -1054,7 +1030,15 @@ function SessionView({ token, username, setError }) {
               <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Final Status
               </div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-secure)', textTransform: 'uppercase' }}>
+              <div style={{ 
+                fontSize: '1.25rem', 
+                fontWeight: 700, 
+                color: sessionSummary.finalRiskState === 'low' ? 'var(--color-secure)' :
+                       sessionSummary.finalRiskState === 'medium' ? 'var(--color-warning)' :
+                       (sessionSummary.finalRiskState === 'high' || sessionSummary.finalRiskState === 'flagged') ? 'var(--color-danger)' :
+                       'var(--color-text-muted)',
+                textTransform: 'uppercase' 
+              }}>
                 {sessionSummary.finalRiskState}
               </div>
             </div>

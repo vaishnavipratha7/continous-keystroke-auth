@@ -51,6 +51,7 @@ export default function App() {
     localStorage.setItem('username', user);
     setToken(token);
     setUsername(user);
+    setInfo(''); // Clear signup message
     
     // Check if user has already completed enrollment
     fetch(`${API_BASE}/enroll/status`, {
@@ -377,6 +378,8 @@ function LoginView({ handleLoginSuccess, setPage, setError }) {
       if (!res.ok) {
         throw new Error(data.detail || 'Login failed.');
       }
+      // Store user-specific MFA PIN for verification challenges
+      localStorage.setItem('mfaPin', data.mfa_pin || '0000');
       handleLoginSuccess(data.token, data.username);
     } catch (err) {
       setError(err.message);
@@ -463,7 +466,8 @@ function SignupView({ setPage, setError, setInfo }) {
       if (!res.ok) {
         throw new Error(data.detail || 'Signup failed.');
       }
-      setInfo('Account created successfully! You can now log in.');
+      // Display user's unique MFA PIN
+      setInfo(`Account created! Your security PIN is: ${data.mfa_pin}. Save this for verification challenges.`);
       setPage('login');
     } catch (err) {
       setError(err.message);
@@ -752,10 +756,19 @@ function SessionView({ token, username, setError, setConnectionError }) {
   const [endSessionMessage, setEndSessionMessage] = useState('');
   const [sessionSummary, setSessionSummary] = useState(null);
   const [isIdle, setIsIdle] = useState(false);
+  const [sessionRiskData, setSessionRiskData] = useState({ action_required: "ALLOW_ACCESS" });
+  const [userMfaPin] = useState(() => localStorage.getItem('mfaPin') || '0000'); // Get MFA PIN once on mount
   
   const localQueueRef = useRef([]);
   const pressedKeysRef = useRef({});
   const lastKeystrokeTimeRef = useRef(Date.now());
+  
+  // Reset consecutive window buffer after MFA success
+  const handleMFASuccess = () => {
+    setRiskState('low');
+    setSessionRiskData({ action_required: "ALLOW_ACCESS" });
+    // Could also call backend endpoint to reset consecutive count if needed
+  };
 
   // Fetch score history from backend
   const fetchSessionScore = async () => {
@@ -768,6 +781,7 @@ function SessionView({ token, username, setError, setConnectionError }) {
       
       setRiskState(data.risk_level);
       setScoreHistory(data.score_history || []);
+      setSessionRiskData(data); // Store full response for MFA logic
     } catch (err) {
       console.error(err);
     }
@@ -1158,6 +1172,18 @@ function SessionView({ token, username, setError, setConnectionError }) {
 
   return (
     <div className="dashboard-grid fade-in">
+      
+      {/* MFA Challenge or Termination Notice */}
+      {(sessionRiskData.action_required === "PROMPT_MFA_CHALLENGE" || sessionRiskData.action_required === "TERMINATE_SESSION") && (
+        <div style={{ gridColumn: '1 / -1' }}>
+          <SessionSecurityMonitor
+  sessionRiskState={sessionRiskData}
+  onResetSession={handleMFASuccess}
+  userMfaPin={userMfaPin}
+/>
+
+        </div>
+      )}
       
       {/* End session success message */}
       {endSessionMessage && (
@@ -1704,6 +1730,134 @@ function ResultsView() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+
+// MFA CHALLENGE COMPONENT
+function SessionSecurityMonitor({ sessionRiskState, onResetSession, userMfaPin }) {
+  const [pinInput, setPinInput] = useState("");
+  const [mfaError, setMfaError] = useState(false);
+  
+  if (sessionRiskState.action_required === "TERMINATE_SESSION") {
+    return (
+      <div className="glass-panel" style={{ 
+        padding: 'var(--space-xl)', 
+        textAlign: 'center', 
+        marginTop: 'var(--space-lg)',
+        borderLeft: '4px solid var(--color-danger)'
+      }}>
+        <div style={{
+          width: '64px',
+          height: '64px',
+          borderRadius: '50%',
+          background: 'rgba(239, 68, 68, 0.2)',
+          border: '2px solid var(--color-danger)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '2rem',
+          margin: '0 auto var(--space-md)'
+        }}>🚨</div>
+        <h2 style={{ fontSize: 'var(--text-2xl)', marginBottom: 'var(--space-sm)', color: 'var(--color-danger)' }}>
+          Security Incident Logged
+        </h2>
+        <p style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--space-lg)' }}>
+          Session terminated due to sustained typing profile anomalies. Identity validation failed.
+        </p>
+        <button 
+          className="btn-primary" 
+          onClick={() => window.location.reload()}
+        >
+          Re-authenticate & Log In
+        </button>
+      </div>
+    );
+  }
+  
+  if (sessionRiskState.action_required === "PROMPT_MFA_CHALLENGE") {
+    const handleVerifyPin = (e) => {
+      e.preventDefault();
+      const trimmedPin = pinInput.trim();
+      console.log('Entered PIN:', trimmedPin, 'Expected PIN:', userMfaPin);
+      
+      if (trimmedPin === userMfaPin) {
+        setPinInput("");
+        setMfaError(false);
+        onResetSession(); // Clear buffer and continue
+      } else {
+        setMfaError(true);
+        setPinInput(""); // Clear incorrect input
+      }
+    };
+  
+    return (
+      <div className="glass-panel" style={{ 
+        padding: 'var(--space-xl)', 
+        maxWidth: '400px', 
+        margin: 'var(--space-lg) auto', 
+        textAlign: 'center',
+        borderLeft: '4px solid var(--color-warning)'
+      }}>
+        <div style={{
+          width: '48px',
+          height: '48px',
+          borderRadius: '50%',
+          background: 'rgba(245, 158, 11, 0.2)',
+          border: '2px solid var(--color-warning)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '1.5rem',
+          margin: '0 auto var(--space-md)'
+        }}>⚠️</div>
+        <h3 style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-sm)' }}>
+          Verification Required
+        </h3>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-lg)' }}>
+          Typing cadence variations detected. Enter your Security PIN to maintain your session.
+        </p>
+        <form onSubmit={handleVerifyPin}>
+          <input 
+            type="password" 
+            maxLength={4} 
+            className="form-control" 
+            placeholder={`Enter Your 4-Digit PIN`} 
+            value={pinInput}
+            onChange={(e) => setPinInput(e.target.value)}
+            style={{ 
+              textAlign: 'center', 
+              letterSpacing: '8px', 
+              fontSize: 'var(--text-2xl)', 
+              marginBottom: 'var(--space-sm)',
+              fontWeight: 600
+            }}
+          />
+          {mfaError && (
+            <p style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-sm)' }}>
+              Invalid verification code. Try again.
+            </p>
+          )}
+          <button type="submit" className="btn-primary">
+            Confirm Identity
+          </button>
+        </form>
+      </div>
+    );
+  }
+  
+  return (
+    <div style={{ 
+      padding: 'var(--space-sm)', 
+      borderRadius: '8px', 
+      textAlign: 'center',
+      background: 'rgba(16, 185, 129, 0.1)',
+      border: '1px solid rgba(16, 185, 129, 0.3)',
+      color: 'var(--color-secure)'
+    }}>
+      ✓ Identity Continually Verified via Keystroke Biometrics
     </div>
   );
 }

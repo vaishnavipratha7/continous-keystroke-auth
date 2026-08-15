@@ -51,7 +51,7 @@ app = FastAPI(title="Continuous Keystroke Authentication API")
 
 # Enable CORS for frontend integration
 # Allow configurable origin via environment variable
-ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -114,14 +114,19 @@ async def signup(credentials: UserAuthSchema):
         logger.warning(f"Signup rejected: username {username} already exists")
         raise HTTPException(status_code=400, detail="Username already exists")
         
+    # Generate user-specific MFA PIN (last 4 digits of hash)
+    import hashlib
+    mfa_pin = hashlib.sha256(username.encode()).hexdigest()[-4:]
+    
     pwd_hash = hash_password(password)
     users_col.insert_one({
         "username": username,
         "password_hash": pwd_hash,
+        "mfa_pin": mfa_pin,
         "created_at": datetime.utcnow()
     })
-    logger.info(f"User {username} created successfully")
-    return {"message": "User created successfully"}
+    logger.info(f"User {username} created successfully with MFA PIN: {mfa_pin}")
+    return {"message": "User created successfully", "mfa_pin": mfa_pin}
 
 @app.post("/login")
 async def login(credentials: UserAuthSchema):
@@ -134,7 +139,8 @@ async def login(credentials: UserAuthSchema):
     return {
         "token": token,
         "username": username,
-        "user_id": str(user["_id"])
+        "user_id": str(user["_id"]),
+        "mfa_pin": user.get("mfa_pin", "0000")  # Return user's MFA PIN
     }
 
 @app.post("/logout")
@@ -223,7 +229,7 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
         
         # Check if thresholds are equal (can happen with very little data)
         if low_cut >= high_cut:
-            high_cut = low_cut + 0.05
+            high_cut = low_cut + 0.01
             logger.warning(f"Adjusted high_cut for user {user_id} to avoid threshold collision")
             
         # Pickle model
@@ -375,13 +381,13 @@ async def session_score(session_id: str, user_id: str = Depends(get_current_user
         })
         return {
             "risk_level": "initializing",
+            "action_required": "ALLOW_ACCESS",
             "score_history": [],
             "total_windows": 0,
             "message": f"Type to initialize authentication. Keystrokes logged: {event_count}"
         }
         
     # Determine risk level with consecutive window logic
-    # "Require 3 consecutive medium/high windows before flagging a session"
     consecutive_hijack_count = 0
     flagged = False
     
@@ -395,10 +401,21 @@ async def session_score(session_id: str, user_id: str = Depends(get_current_user
             flagged = True
             
     latest_risk = scores[-1]["risk_level"]
-    session_risk = "flagged" if flagged else latest_risk
+    
+    # Three-tier trust scoring with step-up MFA
+    if flagged:
+        session_risk = "flagged"
+        action_required = "TERMINATE_SESSION"
+    elif latest_risk == "medium" or consecutive_hijack_count == 2:
+        session_risk = "suspicious"
+        action_required = "PROMPT_MFA_CHALLENGE"
+    else:
+        session_risk = "low"
+        action_required = "ALLOW_ACCESS"
     
     return {
         "risk_level": session_risk,
+        "action_required": action_required,
         "score_history": scores,
         "total_windows": len(scores)
     }
@@ -565,7 +582,7 @@ async def end_session(session_id: str, user_id: str = Depends(get_current_user_i
                 low_cut, high_cut = calibrate_thresholds(model, X_train)
                 
                 if low_cut >= high_cut:
-                    high_cut = low_cut + 0.05
+                    high_cut = low_cut + 0.01
                     
                 # Save retrained model
                 model_bytes = pickle.dumps(model)

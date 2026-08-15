@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import shap
 from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
 import pickle
 
 FEATURE_NAMES = ['dwell_mean', 'dwell_std', 'flight_mean', 'flight_std', 'typing_speed']
@@ -26,18 +27,15 @@ def extract_digraphs(events_df):
         flight = downs[i+1] - ups[i]
         
         # Outlier filtering: drop rows where dwell or flight exceeds 5 seconds
-        # We also filter out nonsensical negative dwells (< 0) or extremely negative flights (< -5)
-        if dwell < 0.0 or dwell > 5.0 or flight < -5.0 or flight > 5.0:
-            continue
-            
-        digraphs.append({
-            'key1': keys[i],
-            'key2': keys[i+1],
-            'dwell': dwell,
-            'flight': flight,
-            'down_time1': downs[i],
-            'up_time2': ups[i+1]
-        })
+        if 0.0 <= dwell <= 5.0 and -5.0 <= flight <= 5.0:
+            digraphs.append({
+                'key1': keys[i],
+                'key2': keys[i+1],
+                'dwell': dwell,
+                'flight': flight,
+                'down_time1': downs[i],
+                'up_time2': ups[i+1]
+            })
         
     return pd.DataFrame(digraphs)
 
@@ -84,32 +82,57 @@ def compute_windows(digraphs_df, window_size=50):
         
     return pd.DataFrame(windows)
 
+class BiometricProfileWrapper:
+    """
+    Wrapper around IsolationForest with StandardScaler for better feature balance.
+    Prevents typing_speed from overwhelming millisecond-precision timing features.
+    """
+    def __init__(self, n_estimators=200, contamination=0.05):
+        self.scaler = StandardScaler()
+        self.model = IsolationForest(
+            n_estimators=n_estimators,
+            contamination=contamination,
+            random_state=42,
+            max_features=len(FEATURE_NAMES)
+        )
+    
+    def fit(self, X):
+        """Fit scaler and model."""
+        X_scaled = self.scaler.fit_transform(X)
+        self.model.fit(X_scaled)
+        return self
+    
+    def score_samples(self, X):
+        """Return anomaly scores (higher = more anomalous)."""
+        X_scaled = self.scaler.transform(X)
+        # IsolationForest returns negative scores, invert to positive
+        return -self.model.score_samples(X_scaled)
+
 def train_user_model(X_train):
     """
-    Trains an Isolation Forest model on user enrollment windows.
-    n_estimators=200, contamination=0.05
+    Trains an Isolation Forest model with StandardScaler on user enrollment windows.
+    Feature scaling ensures typing_speed doesn't dominate millisecond-precision timing.
     """
     if isinstance(X_train, pd.DataFrame):
         X_train_vals = X_train[FEATURE_NAMES].values
     else:
         X_train_vals = X_train
         
-    model = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
-    model.fit(X_train_vals)
-    return model
+    model_wrapper = BiometricProfileWrapper(n_estimators=200, contamination=0.05)
+    model_wrapper.fit(X_train_vals)
+    return model_wrapper
 
 def calibrate_thresholds(model, X_enroll):
     """
     Computes low/high risk thresholds using the 90th and 99th percentile of enrollment scores.
-    Score is opposite of score_samples, so higher = more anomalous.
+    Score is positive: higher = more anomalous.
     """
     if isinstance(X_enroll, pd.DataFrame):
         X_enroll_vals = X_enroll[FEATURE_NAMES].values
     else:
         X_enroll_vals = X_enroll
         
-    raw_scores = model.score_samples(X_enroll_vals)
-    anomaly_scores = -raw_scores  # convert to positive: higher is more anomalous
+    anomaly_scores = model.score_samples(X_enroll_vals)
     
     low_cut = np.percentile(anomaly_scores, 90)
     high_cut = np.percentile(anomaly_scores, 99)
@@ -132,8 +155,7 @@ def score_window(model, window_features, low_cut, high_cut):
         # assume pandas DataFrame with 1 row
         x = window_features[FEATURE_NAMES].values
         
-    raw_score = model.score_samples(x)[0]
-    anomaly_score = -raw_score
+    anomaly_score = model.score_samples(x)[0]
     
     if anomaly_score < low_cut:
         risk_level = "low"
@@ -146,7 +168,7 @@ def score_window(model, window_features, low_cut, high_cut):
 
 def explain_window(model, window_features):
     """
-    Explains the Isolation Forest prediction for a single window.
+    Explains the Isolation Forest prediction for a single window using SHAP.
     Returns a dictionary of SHAP values mapped to feature names.
     """
     if isinstance(window_features, dict):
@@ -158,8 +180,11 @@ def explain_window(model, window_features):
     else:
         x = window_features[FEATURE_NAMES].values
         
-    # We use TreeExplainer as verified
-    explainer = shap.TreeExplainer(model)
-    shap_vals = explainer.shap_values(x)[0] # shape (5,)
+    # Scale features for SHAP
+    x_scaled = model.scaler.transform(x)
+    
+    # Use TreeExplainer for IsolationForest
+    explainer = shap.TreeExplainer(model.model)
+    shap_vals = explainer.shap_values(x_scaled)[0]
     
     return {FEATURE_NAMES[i]: float(shap_vals[i]) for i in range(len(FEATURE_NAMES))}

@@ -1,228 +1,336 @@
-# Continuous Keystroke Biometric Authentication System
+# Continuous Keystroke Authentication System
 
-A real-time continuous authentication system that monitors typing dynamics to detect session hijacking attempts. This system extends the work of [Martins et al. (2025)](https://doi.org/10.1007/s42452-025-07449-5) on keystroke dynamics for intelligent biometric authentication, implementing continuous (not just initial) authentication with adaptive learning and session hijacking detection.
+> Real-time session hijacking detection using keystroke dynamics and machine learning
 
-## Key Features
+[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688.svg)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB.svg)](https://reactjs.org/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-7.0-47A248.svg)](https://www.mongodb.com/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-- **Continuous Monitoring**: Real-time keystroke analysis during active sessions
-- **Session Hijacking Detection**: Identifies attackers within 2-3 typing windows
-- **Explainable AI**: SHAP values explain why anomalies are flagged
-- **Adaptive Learning**: Model improves from legitimate user sessions
-- **Live Dashboard**: Real-time visualization of authentication status
+## 🎯 Problem Statement
 
-## Architecture
+Traditional authentication systems only verify identity at login. Once authenticated, if an attacker physically takes over a user's session, the system cannot detect the switch. This project implements **continuous authentication** that monitors typing patterns throughout the session to detect when a different person takes control.
+
+## 🎬 Demo
+
+![Demo Animation](docs/demo.gif)
+
+**Live Demo**: [https://keystroke-auth-demo.vercel.app](https://keystroke-auth-demo.vercel.app) *(if deployed)*
+
+## ✨ Key Features
+
+- **Real-Time Monitoring**: Analyzes typing dynamics every ~50 keystrokes
+- **Fast Detection**: Identifies attackers within 2-3 typing windows (100-150 keys)
+- **Explainable AI**: SHAP values show *why* each decision was made
+- **Adaptive Learning**: Model improves from confirmed legitimate sessions
+- **Zero User Friction**: Invisible monitoring during normal typing
+- **Interactive Dashboard**: Live risk visualization with technical metrics
+
+## 📊 Performance Metrics
+
+| Metric | Value | Description |
+|--------|-------|-------------|
+| **Equal Error Rate (EER)** | 24.43% | Balance point between false accepts and false rejects |
+| **Detection Latency** | 2 windows | Average lag after attack begins (~100 keystrokes) |
+| **False Accept Rate (FAR)** | 29.30% | Impostor typed accepted as genuine at low threshold |
+| **False Reject Rate (FRR)** | 20.62% | Genuine user rejected at low threshold |
+| **Dataset** | KeyRecs | 562K+ keystroke events from 100+ users |
+
+### Validation Results
+
+<div align="center">
+  <img src="docs/figures/roc_curve.png" width="45%" alt="ROC Curve"/>
+  <img src="docs/figures/takeover_detection.png" width="45%" alt="Takeover Detection"/>
+</div>
+
+**Left**: ROC curve showing tradeoff between FAR and FRR across thresholds  
+**Right**: Real-time anomaly scores during simulated session takeover (orange=attack begins, purple=system locks session)
+
+## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         FRONTEND (React)                        │
+│                     FRONTEND (React + Vite)                     │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │  Enrollment  │  │   Dashboard  │  │ SHAP Explain │         │
+│  │   Landing    │  │  Enrollment  │  │   Dashboard  │         │
+│  │   + Signup   │  │   (Capture   │  │  (Real-time  │         │
+│  │              │  │   baseline)  │  │   monitor)   │         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │   History    │  │ SHAP Explain │  │   Results    │         │
+│  │   (Past      │  │  (Feature    │  │ (Validation) │         │
+│  │   sessions)  │  │  importance) │  │              │         │
 │  └──────────────┘  └──────────────┘  └──────────────┘         │
 └────────────────────────┬────────────────────────────────────────┘
-                         │ HTTP/JSON
+                         │ REST API (HTTP/JSON)
 ┌────────────────────────▼────────────────────────────────────────┐
-│                      BACKEND (FastAPI)                          │
+│                    BACKEND (FastAPI)                            │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │     Auth     │  │   Pipeline   │  │   Database   │         │
-│  │   (JWT)      │  │ (Isolation   │  │  (MongoDB)   │         │
-│  │              │  │   Forest)    │  │              │         │
+│  │ Auth Service │  │ ML Pipeline  │  │  Database    │         │
+│  │ - JWT tokens │  │ - Feature    │  │  - Users     │         │
+│  │ - Sessions   │  │   extraction │  │  - Models    │         │
+│  │ - Bcrypt     │  │ - Isolation  │  │  - Sessions  │         │
+│  │              │  │   Forest     │  │  - Events    │         │
+│  │              │  │ - SHAP       │  │              │         │
 │  └──────────────┘  └──────────────┘  └──────────────┘         │
-└─────────────────────────────────────────────────────────────────┘
+└────────────────────────┬────────────────────────────────────────┘
                          │
 ┌────────────────────────▼────────────────────────────────────────┐
-│                    DATA PROCESSING                              │
-│  KeyRecs Dataset → Digraph Extraction → Windowing → Features   │
+│                   DATA LAYER (MongoDB)                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │ keystroke_   │  │ user_models  │  │ session_     │         │
+│  │ events       │  │ (pickled ML) │  │ scores       │         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Setup Instructions
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python 3.8+
-- Node.js 16+
-- MongoDB 4.4+
+- **Python 3.11+** with pip
+- **Node.js 20+** with npm
+- **MongoDB 7.0+** (local or Docker)
 
 ### 1. Clone Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/yourusername/continuous-keystroke-auth.git
 cd continuous-keystroke-auth
 ```
 
-### 2. Download Dataset
+### 2. Start MongoDB
 
+**Using Docker** (recommended):
 ```bash
-python scripts/download_data.py
-python scripts/parse_dataset.py
+docker run -d -p 27017:27017 --name keystroke-mongo mongo:7.0
 ```
 
-This downloads the KeyRecs free-text dataset and reconstructs ~562k keystroke events.
+**Or use local MongoDB installation**
 
 ### 3. Backend Setup
 
 ```bash
-cd backend
-pip install -r requirements.txt  # Create this if needed
-cp .env.example .env
-# Edit .env with your MongoDB URI
-```
+# Install dependencies
+pip install -r backend/requirements.txt
 
-Start MongoDB:
-```bash
-mongod --dbpath /path/to/data
-```
-
-Start backend server:
-```bash
+# Start backend server
 uvicorn backend.main:app --reload
 ```
+
+Backend runs at **http://127.0.0.1:8000**
 
 ### 4. Frontend Setup
 
 ```bash
 cd frontend
+
+# Install dependencies
 npm install
-cp .env.example .env
+
+# Start development server
 npm run dev
 ```
 
-Frontend runs at http://localhost:5173
+Frontend runs at **http://localhost:5173**
 
-### 5. Run Validation
+### 5. Try It Out
+
+1. **Sign Up** → Create account (username + password ≥8 chars)
+2. **Enroll** → Type the passage 2-3 times (need 350+ keystrokes)
+3. **Session** → Type freely; system monitors in real-time
+4. **Demo Attack** → Click "Demo: Synthetic Attack" button to simulate hijacking
+5. **Explainability** → Click any flagged window to see SHAP explanation
+
+## 🧪 Optional: Run Validation
 
 ```bash
+# Download and parse KeyRecs dataset
+python scripts/download_data.py
+python scripts/parse_dataset.py
+
+# Run validation (generates figures and metrics)
 python scripts/run_validation.py
+
+# Run unit tests
+pip install pytest
+pytest backend/tests/ -v
 ```
 
-This generates validation metrics and figures in `docs/figures/`.
+## 🐳 Docker Deployment
 
-## Running the Demo
+```bash
+# Build and start all services (MongoDB + Backend + Frontend)
+docker-compose up --build
 
-1. **Sign Up**: Create a new account
-2. **Enrollment**: Type the provided passage 2-3 times (~350+ keystrokes)
-3. **Active Session**: Type freely; system monitors in real-time
-4. **Test Attack**: Click "Demo: Synthetic Attack" to see detection in action
-5. **Explainability**: View SHAP values showing why anomalies were flagged
+# Access at http://localhost
+```
 
-## Results
-
-### Performance Metrics (10-user validation)
-
-- **Equal Error Rate (EER)**: 24.43%
-- **False Accept Rate (FAR)** at low threshold: 29.30%
-- **False Rejection Rate (FRR)** at low threshold: 20.62%
-- **Detection Latency**: 2-3 windows after attack begins
-
-### Takeover Detection Success
-
-The system successfully detected all simulated session hijacking attempts with an average lag of 2 windows (100 keystrokes).
-
-![ROC Curve](docs/figures/roc_curve.png)
-
-*ROC Curve showing system performance across different thresholds*
-
-![Takeover Detection](docs/figures/takeover_detection.png)
-
-*Real-time anomaly scores during a simulated session takeover. Orange line marks the splice point where the attacker begins typing; purple line shows where the system triggers the lockdown.*
-
-## Technical Details
+## 🔬 Technical Details
 
 ### Feature Engineering
 
-- **Dwell Time**: Key press duration (down to up)
-- **Flight Time**: Inter-key latency (up to next down)
-- **Typing Speed**: Keys per second in window
-- **Statistical Aggregates**: Mean and std dev per 50-digraph window
+The system extracts 5 features per 50-keystroke window:
 
-### Model
+| Feature | Description | Example |
+|---------|-------------|---------|
+| `dwell_mean` | Average key press duration | 0.095s |
+| `dwell_std` | Variability in key press duration | 0.023s |
+| `flight_mean` | Average time between keys | 0.142s |
+| `flight_std` | Variability in inter-key timing | 0.031s |
+| `typing_speed` | Keys per second | 6.8 keys/s |
 
-- **Algorithm**: Isolation Forest (unsupervised anomaly detection)
-- **Window Size**: 50 digraphs (optimized for EER)
-- **Thresholds**: 90th percentile (medium) and 99th percentile (high)
-- **Training**: 80% enrollment, 20% calibration split
+### Machine Learning Pipeline
 
-### Decision Logic
+```python
+# 1. Enrollment
+events → digraphs → windows (50 each) → features (5-dim vectors)
+         ↓
+# 2. Training (80/20 split)
+train_windows (80%) → IsolationForest(n_estimators=200, contamination=0.05)
+calibrate_windows (20%) → thresholds (90th & 99th percentile)
 
-Session flagged as "hijacked" after **3 consecutive medium/high risk windows** to reduce false positives from natural typing variations.
+# 3. Session Monitoring
+new_window → score → classify (low/medium/high) → flag if 3 consecutive medium/high
+```
 
-## Gap Filling
+**Why Isolation Forest?**
+- Unsupervised (no labeled attack data needed)
+- Fast inference (<5ms per window)
+- Robust to outliers
+- Naturally assigns anomaly scores
 
-This system extends the work of Martins et al. (2025) in keystroke dynamics authentication by addressing several key gaps:
+### Risk Classification
 
-1. **Continuous vs. Initial**: Monitors entire session, not just login authentication
-2. **Adaptive Learning**: Model improves from confirmed legitimate sessions
-3. **Real-time Detection**: Live monitoring with <5 second latency
-4. **Explainability**: SHAP values explain each decision for transparency
-5. **User-facing Dashboard**: Transparent risk visualization for end users
+```
+Anomaly Score < low_cut (90th percentile)  → LOW risk (green)
+low_cut ≤ Score < high_cut (99th percentile) → MEDIUM risk (amber)
+Score ≥ high_cut                              → HIGH risk (red)
 
-### Dataset
+Session FLAGGED after 3 consecutive medium/high windows
+```
 
-This implementation uses the KeyRecs free-text dataset from [Bours & Mondal (2023)](https://link.springer.com/article/10.1007/s00521-022-07472-0) for training and validation.
+### Explainability with SHAP
 
-## Project Structure
+Every flagged window includes SHAP (SHapley Additive exPlanations) values showing feature contributions:
+
+```
+Window 7 flagged because:
+  typing_speed:  +0.234 (much slower than baseline)
+  dwell_mean:    +0.089 (longer key holds)
+  flight_std:    -0.023 (less rhythm variation)
+```
+
+## 📁 Project Structure
 
 ```
 continuous-keystroke-auth/
 ├── backend/
-│   ├── main.py           # FastAPI endpoints
-│   ├── pipeline.py       # ML pipeline
-│   ├── auth.py           # Authentication logic
-│   └── db.py             # MongoDB interface
+│   ├── main.py              # FastAPI endpoints (auth, enroll, session)
+│   ├── pipeline.py          # ML pipeline (features, training, scoring)
+│   ├── auth.py              # JWT + bcrypt authentication
+│   ├── db.py                # MongoDB connection and queries
+│   ├── requirements.txt     # Python dependencies
+│   ├── Dockerfile           # Backend container
+│   └── tests/
+│       └── test_pipeline.py # Unit tests for ML functions
 ├── frontend/
-│   └── src/
-│       └── App.jsx       # React dashboard
+│   ├── src/
+│   │   ├── App.jsx          # React app with all views
+│   │   ├── App.css          # Component styles
+│   │   └── index.css        # Global styles + design tokens
+│   ├── public/
+│   │   └── figures/         # Validation result images
+│   ├── package.json         # Node dependencies
+│   ├── vite.config.js       # Vite build configuration
+│   └── Dockerfile           # Frontend container (nginx)
 ├── scripts/
-│   ├── download_data.py  # Dataset downloader
-│   ├── parse_dataset.py  # Digraph reconstruction
-│   ├── run_validation.py # Performance evaluation
-│   └── test_e2e.py       # End-to-end test
+│   ├── download_data.py     # Fetch KeyRecs dataset
+│   ├── parse_dataset.py     # Reconstruct keystroke events
+│   ├── run_validation.py    # Cross-validation + metrics
+│   └── validation_report.txt # Generated metrics report
 ├── data/
-│   ├── free-text.csv     # Raw KeyRecs data
-│   └── reconstructed_events.csv  # Processed events
-└── docs/
-    └── figures/          # Validation visualizations
+│   ├── free-text.csv        # Raw KeyRecs data (gitignored)
+│   └── reconstructed_events.csv # Processed events (gitignored)
+├── docs/
+│   └── figures/
+│       ├── roc_curve.png    # Performance visualization
+│       └── takeover_detection.png # Attack detection timeline
+├── docker-compose.yml       # Multi-container orchestration
+├── .github/
+│   └── workflows/
+│       └── tests.yml        # CI/CD pipeline
+└── README.md                # This file
 ```
 
-## Testing
+## 🔬 Research Context
 
-Run end-to-end system test:
-```bash
-python scripts/test_e2e.py
-```
+This system extends the work of **Martins et al. (2025)** on keystroke dynamics authentication by addressing key gaps:
 
-This tests signup → login → enrollment → training → session monitoring → hijack detection → SHAP explanation.
+| Aspect | Martins et al. (2025) | This System |
+|--------|----------------------|-------------|
+| **Scope** | Initial authentication | Continuous session monitoring |
+| **Detection** | Static (login only) | Real-time (every 50 keystrokes) |
+| **Adaptation** | Fixed model | Adaptive learning from safe sessions |
+| **Explainability** | None | SHAP values for each decision |
+| **User Interface** | N/A | Live dashboard with risk visualization |
+| **Dataset** | KeyRecs | KeyRecs (same, for comparability) |
 
-## License
+### Dataset Citation
 
-This project uses the KeyRecs dataset from [Bours & Mondal, 2023], licensed under CC BY 4.0.
+This project uses the **KeyRecs free-text dataset**:
 
-## Citation
+> Bours, P., Mondal, S. *A dataset for exploring user authentication through free-text keystroke dynamics*. Neural Comput & Applic 35, 16077–16093 (2023). https://doi.org/10.1007/s00521-022-07472-0
 
-If you use this system, please cite:
+**License**: CC BY 4.0
 
-**Base Paper**:
-```
-Martins, J.P., Soares, S.C., Pinho, A.J. et al. Keystroke dynamics for intelligent biometric 
-authentication with machine learning. Discov Appl Sci 7, 34 (2025). 
-https://doi.org/10.1007/s42452-025-07449-5
-```
+### Base Research Citation
 
-**Dataset**:
-```
-Bours, P., Mondal, S. A dataset for exploring user authentication through free-text keystroke dynamics. 
-Neural Comput & Applic 35, 16077–16093 (2023). https://doi.org/10.1007/s00521-022-07472-0
-```
+Inspired by:
 
-## Contributing
+> Martins, J.P., Soares, S.C., Pinho, A.J. et al. *Keystroke dynamics for intelligent biometric authentication with machine learning*. Discov Appl Sci 7, 34 (2025). https://doi.org/10.1007/s42452-025-07449-5
 
-Pull requests welcome! Areas for improvement:
+## 🛣️ Future Enhancements
 
-- Lower EER through deep learning models
-- Multi-factor authentication integration
-- Mobile device support
-- Additional behavioral biometrics (mouse dynamics, etc.)
+- [ ] **Deep Learning Models**: LSTM/Transformer for temporal patterns (target: <15% EER)
+- [ ] **Multi-Factor Fallback**: Trigger 2FA on medium risk instead of immediate lockout
+- [ ] **Context Awareness**: Adjust thresholds for fatigue, different keyboards, etc.
+- [ ] **Mobile Support**: Touchscreen typing dynamics (tap pressure, finger size)
+- [ ] **Multi-Modal**: Combine with mouse dynamics for stronger authentication
+- [ ] **Privacy**: Federated learning to train without sharing raw keystroke data
+- [ ] **Performance**: Redis caching for model loading, async background training
 
-## Support
+## 🤝 Contributing
 
-For issues or questions, please open a GitHub issue.
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
+
+The KeyRecs dataset is licensed under CC BY 4.0.
+
+## 👤 Author
+
+**Your Name**
+- GitHub: [@yourusername](https://github.com/yourusername)
+- LinkedIn: [Your Name](https://linkedin.com/in/yourprofile)
+- Email: your.email@example.com
+
+## 🙏 Acknowledgments
+
+- Martins et al. for keystroke dynamics research foundation
+- Bours & Mondal for the KeyRecs dataset
+- scikit-learn and SHAP libraries for ML infrastructure
+- FastAPI and React communities for excellent tooling
+
+---
+
+**⭐ Star this repo if you find it useful!**

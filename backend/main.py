@@ -39,6 +39,14 @@ from backend.pipeline import (
     FEATURE_NAMES
 )
 
+# Setup logging
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Continuous Keystroke Authentication API")
 
 # Enable CORS for frontend integration
@@ -89,17 +97,21 @@ async def get_current_user_id(authorization: Optional[str] = Header(None)):
 
 @app.post("/signup")
 async def signup(credentials: UserAuthSchema):
+    logger.info(f"Signup attempt for username: {credentials.username}")
     username = credentials.username.strip()
     password = credentials.password
     
     # Validation
     if not username or username.isspace():
+        logger.warning(f"Signup rejected: empty username")
         raise HTTPException(status_code=400, detail="Username cannot be empty or only whitespace")
     if not password or len(password) < 8:
+        logger.warning(f"Signup rejected: password too short for user {username}")
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
         
     existing = get_user_by_username(username)
     if existing:
+        logger.warning(f"Signup rejected: username {username} already exists")
         raise HTTPException(status_code=400, detail="Username already exists")
         
     pwd_hash = hash_password(password)
@@ -108,6 +120,7 @@ async def signup(credentials: UserAuthSchema):
         "password_hash": pwd_hash,
         "created_at": datetime.utcnow()
     })
+    logger.info(f"User {username} created successfully")
     return {"message": "User created successfully"}
 
 @app.post("/login")
@@ -157,9 +170,13 @@ async def enroll_keystrokes(batch: KeystrokeBatchSchema, user_id: str = Depends(
 
 @app.post("/enroll/train")
 async def enroll_train(user_id: str = Depends(get_current_user_id)):
+    logger.info(f"Training model for user: {user_id}")
     # Retrieve enrollment events
     events = list(keystroke_events_col.find({"user_id": user_id, "type": "enrollment"}).sort("down_time", 1))
+    logger.info(f"Found {len(events)} enrollment events for user {user_id}")
+    
     if len(events) < 350:
+        logger.warning(f"Insufficient events for user {user_id}: {len(events)}/350")
         raise HTTPException(
             status_code=400, 
             detail=f"Insufficient keystrokes for training. Have {len(events)}, need at least 350."
@@ -176,7 +193,10 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
     digraphs_df = extract_digraphs(events_df)
     windows_df = compute_windows(digraphs_df)
     
+    logger.info(f"Extracted {len(digraphs_df)} digraphs and {len(windows_df)} windows for user {user_id}")
+    
     if len(windows_df) < 1:
+        logger.error(f"No windows generated for user {user_id}")
         raise HTTPException(
             status_code=400,
             detail=f"Could not construct any windows from typing. Keystrokes may be too sparse or filtered as outliers. Type steadily and continuously."
@@ -188,6 +208,7 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
     calibrate_windows = windows_df.iloc[split_idx:]
     
     if len(train_windows) < 1 or len(calibrate_windows) < 1:
+        logger.error(f"Insufficient windows for split for user {user_id}")
         raise HTTPException(
             status_code=400,
             detail=f"Insufficient windows for training and calibration. Need at least 2 windows. Have {len(windows_df)} windows."
@@ -198,9 +219,12 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
         model = train_user_model(train_windows)
         low_cut, high_cut = calibrate_thresholds(model, calibrate_windows)
         
+        logger.info(f"Model trained for user {user_id}: low_cut={low_cut:.4f}, high_cut={high_cut:.4f}")
+        
         # Check if thresholds are equal (can happen with very little data)
         if low_cut >= high_cut:
             high_cut = low_cut + 0.05
+            logger.warning(f"Adjusted high_cut for user {user_id} to avoid threshold collision")
             
         # Pickle model
         model_bytes = pickle.dumps(model)
@@ -221,6 +245,8 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
             upsert=True
         )
         
+        logger.info(f"Model successfully saved for user {user_id}")
+        
         return {
             "message": "Model trained and saved successfully",
             "windows_count": len(windows_df),
@@ -230,6 +256,7 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
             "high_threshold": high_cut
         }
     except Exception as e:
+        logger.error(f"Training failed for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
 @app.get("/enroll/status")
@@ -417,6 +444,58 @@ async def session_explain(session_id: str, window_index: int, user_id: str = Dep
         "shap_values": shap_vals,
         "feature_values": feature_values
     }
+
+@app.get("/session/history")
+async def session_history(user_id: str = Depends(get_current_user_id)):
+    """
+    Returns a list of past sessions for the current user.
+    Each entry includes: session_id, start_time, end_time, final_risk_status, window_count.
+    """
+    # Find all unique session_ids for this user
+    pipeline = [
+        {"$match": {"user_id": user_id}},
+        {"$group": {
+            "_id": "$session_id",
+            "window_count": {"$sum": 1},
+            "start_time": {"$min": "$timestamp"},
+            "end_time": {"$max": "$timestamp"},
+            "scores": {"$push": {"window_index": "$window_index", "risk_level": "$risk_level"}}
+        }},
+        {"$sort": {"end_time": -1}}
+    ]
+    
+    sessions = list(session_scores_col.aggregate(pipeline))
+    
+    result = []
+    for sess in sessions:
+        session_id = sess["_id"]
+        
+        # Determine final risk status using consecutive-window logic
+        scores = sorted(sess["scores"], key=lambda x: x["window_index"])
+        consecutive_hijack_count = 0
+        flagged = False
+        
+        for s in scores:
+            if s["risk_level"] in ["medium", "high"]:
+                consecutive_hijack_count += 1
+            else:
+                consecutive_hijack_count = 0
+                
+            if consecutive_hijack_count >= 3:
+                flagged = True
+                break
+        
+        final_risk = "flagged" if flagged else (scores[-1]["risk_level"] if scores else "unknown")
+        
+        result.append({
+            "session_id": session_id,
+            "start_time": sess["start_time"].isoformat() if sess["start_time"] else None,
+            "end_time": sess["end_time"].isoformat() if sess["end_time"] else None,
+            "final_risk_status": final_risk,
+            "window_count": sess["window_count"]
+        })
+    
+    return {"sessions": result}
 
 @app.post("/session/end")
 async def end_session(session_id: str, user_id: str = Depends(get_current_user_id)):

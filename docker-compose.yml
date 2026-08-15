@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: keystroke_auth_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=keystroke_auth
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: keystroke_auth_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/keystroke_auth
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:80
+    depends_on:
+      - mongodb
+    volumes:
+      - ./data:/app/data:ro
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: keystroke_auth_frontend
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:

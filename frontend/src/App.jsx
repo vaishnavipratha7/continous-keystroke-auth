@@ -4,7 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
 export default function App() {
-  const [page, setPage] = useState('landing'); // landing, login, signup, enrollment, session
+  const [page, setPage] = useState('landing'); // landing, login, signup, enrollment, session, history, results
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [username, setUsername] = useState(localStorage.getItem('username') || null);
   const [error, setError] = useState('');
@@ -111,7 +111,9 @@ export default function App() {
         {page === 'login' && <LoginView handleLoginSuccess={handleLoginSuccess} setPage={setPage} setError={setError} />}
         {page === 'signup' && <SignupView setPage={setPage} setError={setError} setInfo={setInfo} />}
         {page === 'enrollment' && <EnrollmentView token={token} setPage={setPage} setError={setError} />}
-        {page === 'session' && <SessionView token={token} username={username} setError={setError} />}
+        {page === 'session' && <SessionView token={token} username={username} setError={setError} setConnectionError={setConnectionError} />}
+        {page === 'history' && <HistoryView token={token} setError={setError} setConnectionError={setConnectionError} />}
+        {page === 'results' && <ResultsView />}
       </main>
     </div>
   );
@@ -242,17 +244,23 @@ function Navbar({ username, handleLogout, page, setPage, token }) {
           <span style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>
             User: <strong style={{ color: 'var(--color-text-main)' }}>{username}</strong>
           </span>
-          <button onClick={() => setPage('enrollment')} style={{
-            background: 'none', border: 'none', color: 'var(--color-text-muted)', 
-            cursor: 'pointer', fontSize: '0.9rem', transition: 'var(--transition-smooth)'
-          }} className="nav-link">
-            Re-Enroll Signature
-          </button>
           <button onClick={() => setPage('session')} style={{
             background: 'none', border: 'none', color: 'var(--color-text-muted)', 
             cursor: 'pointer', fontSize: '0.9rem', transition: 'var(--transition-smooth)'
           }} className="nav-link">
             Dashboard
+          </button>
+          <button onClick={() => setPage('history')} style={{
+            background: 'none', border: 'none', color: 'var(--color-text-muted)', 
+            cursor: 'pointer', fontSize: '0.9rem', transition: 'var(--transition-smooth)'
+          }} className="nav-link">
+            History
+          </button>
+          <button onClick={() => setPage('enrollment')} style={{
+            background: 'none', border: 'none', color: 'var(--color-text-muted)', 
+            cursor: 'pointer', fontSize: '0.9rem', transition: 'var(--transition-smooth)'
+          }} className="nav-link">
+            Re-Enroll
           </button>
           <button onClick={handleLogout} className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
             Logout
@@ -731,10 +739,10 @@ function EnrollmentView({ token, setPage, setError }) {
 }
 
 // SESSION VIEW (DASHBOARD)
-function SessionView({ token, username, setError }) {
+function SessionView({ token, username, setError, setConnectionError }) {
   const [sessionId] = useState(() => Math.random().toString(36).substring(2, 10) + "_" + Date.now());
   const [typedText, setTypedText] = useState('');
-  const [riskState, setRiskState] = useState('initializing'); // initializing, low, medium, high, flagged
+  const [riskState, setRiskState] = useState('initializing'); // initializing, low, medium, high, flagged, idle
   const [scoreHistory, setScoreHistory] = useState([]);
   const [totalEvents, setTotalEvents] = useState(0);
   const [explainWindowIndex, setExplainWindowIndex] = useState(null);
@@ -743,9 +751,11 @@ function SessionView({ token, username, setError }) {
   const [ending, setEnding] = useState(false);
   const [endSessionMessage, setEndSessionMessage] = useState('');
   const [sessionSummary, setSessionSummary] = useState(null);
+  const [isIdle, setIsIdle] = useState(false);
   
   const localQueueRef = useRef([]);
   const pressedKeysRef = useRef({});
+  const lastKeystrokeTimeRef = useRef(Date.now());
 
   // Fetch score history from backend
   const fetchSessionScore = async () => {
@@ -763,12 +773,30 @@ function SessionView({ token, username, setError }) {
     }
   };
 
-  // Poll score updates every 2 seconds
+  // Poll score updates every 2 seconds (pause if idle)
   useEffect(() => {
+    if (isIdle) return; // Don't poll when idle
+    
     fetchSessionScore();
     const interval = setInterval(fetchSessionScore, 2000);
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [sessionId, isIdle]);
+  
+  // Idle detection: flag if no keystroke in 5 minutes
+  useEffect(() => {
+    const checkIdle = setInterval(() => {
+      const timeSinceLastKey = Date.now() - lastKeystrokeTimeRef.current;
+      const fiveMinutes = 5 * 60 * 1000;
+      
+      if (timeSinceLastKey > fiveMinutes && !isIdle && riskState !== 'flagged') {
+        setIsIdle(true);
+      } else if (timeSinceLastKey <= fiveMinutes && isIdle) {
+        setIsIdle(false);
+      }
+    }, 10000); // Check every 10 seconds
+    
+    return () => clearInterval(checkIdle);
+  }, [isIdle, riskState]);
   
   // Auto-open SHAP explanation when session becomes flagged
   useEffect(() => {
@@ -793,6 +821,11 @@ function SessionView({ token, username, setError }) {
       e.preventDefault();
       return;
     }
+    
+    // Update last keystroke time for idle detection
+    lastKeystrokeTimeRef.current = Date.now();
+    if (isIdle) setIsIdle(false);
+    
     const key = e.key;
     if (key in pressedKeysRef.current) {
       const downTime = pressedKeysRef.current[key];
@@ -819,28 +852,45 @@ function SessionView({ token, username, setError }) {
     const batch = [...localQueueRef.current];
     localQueueRef.current = [];
     
-    try {
-      const res = await fetch(`${API_BASE}/session/keystrokes`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          session_id: sessionId,
-          events: batch
-        })
-      });
-      if (!res.ok) {
-        const d = await res.json();
-        console.error("Batch send error:", d.detail);
-      } else {
-        // Trigger score update
-        fetchSessionScore();
+    const attemptSend = async (retryCount = 0) => {
+      try {
+        const res = await fetch(`${API_BASE}/session/keystrokes`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            session_id: sessionId,
+            events: batch
+          })
+        });
+        if (!res.ok) {
+          const d = await res.json();
+          console.error("Batch send error:", d.detail);
+          throw new Error(d.detail || "Server error");
+        } else {
+          // Trigger score update
+          fetchSessionScore();
+        }
+      } catch (err) {
+        console.error(`Failed to push batch events (attempt ${retryCount + 1}):`, err);
+        
+        // Retry once after 1 second if first attempt fails
+        if (retryCount === 0) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return attemptSend(1);
+        } else {
+          // Both attempts failed - show warning
+          setConnectionError(true);
+          setTimeout(() => setConnectionError(false), 5000);
+          // Re-add events to queue for next batch
+          localQueueRef.current = [...batch, ...localQueueRef.current];
+        }
       }
-    } catch (err) {
-      console.error("Failed to push batch events:", err);
-    }
+    };
+    
+    await attemptSend();
   };
 
   // Triggered when user clicks End Session
@@ -938,6 +988,14 @@ function SessionView({ token, username, setError }) {
 
   // Map state to human-readable tag style and full explanation
   const getRiskStatusLabel = () => {
+    if (isIdle) {
+      return {
+        text: 'IDLE',
+        className: 'badge-collecting',
+        explanation: 'No typing detected for 5+ minutes. Monitoring paused. Start typing to resume authentication.'
+      };
+    }
+    
     switch (riskState) {
       case 'low': 
         return { 
@@ -1478,3 +1536,175 @@ function SessionView({ token, username, setError }) {
     </div>
   );
 }
+
+
+// HISTORY VIEW
+function HistoryView({ token, setError, setConnectionError }) {
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const fetchHistory = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/session/history`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to load history');
+      const data = await res.json();
+      setSessions(data.sessions || []);
+    } catch (err) {
+      setError(err.message);
+      setConnectionError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: '900px', margin: 'var(--space-2xl) auto', padding: '0 var(--space-lg)' }} className="fade-in">
+      <div className="glass-panel" style={{ padding: 'var(--space-xl)' }}>
+        <h2 style={{ fontSize: 'var(--text-3xl)', marginBottom: 'var(--space-md)' }}>Session History</h2>
+        <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-base)', marginBottom: 'var(--space-xl)' }}>
+          Review all your past authentication sessions
+        </p>
+
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--color-text-muted)' }}>
+            Loading history...
+          </div>
+        ) : sessions.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--color-text-muted)' }}>
+            No sessions yet. Start a session to see it here.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+            {sessions.map((sess, idx) => {
+              const riskColor = sess.final_risk_status === 'low' ? 'var(--color-secure)' :
+                               sess.final_risk_status === 'medium' ? 'var(--color-warning)' :
+                               sess.final_risk_status === 'flagged' || sess.final_risk_status === 'high' ? 'var(--color-danger)' :
+                               'var(--color-text-muted)';
+              
+              return (
+                <div key={idx} className="glass-panel" style={{
+                  padding: 'var(--space-lg)',
+                  borderLeft: `4px solid ${riskColor}`,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <div>
+                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-xs)' }}>
+                      Session ID: <code style={{ color: 'var(--color-text-main)' }}>{sess.session_id.split('_')[0]}</code>
+                    </div>
+                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
+                      {sess.start_time ? new Date(sess.start_time).toLocaleString() : 'Unknown'}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 'var(--space-lg)', alignItems: 'center' }}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>
+                        Windows
+                      </div>
+                      <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700 }}>
+                        {sess.window_count}
+                      </div>
+                    </div>
+                    <div style={{
+                      padding: '6px 16px',
+                      borderRadius: '20px',
+                      fontSize: 'var(--text-sm)',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      background: `${riskColor}22`,
+                      color: riskColor,
+                      border: `1px solid ${riskColor}44`
+                    }}>
+                      {sess.final_risk_status}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// RESULTS VIEW
+function ResultsView() {
+  return (
+    <div style={{ maxWidth: '1100px', margin: 'var(--space-2xl) auto', padding: '0 var(--space-lg)' }} className="fade-in">
+      <div className="glass-panel" style={{ padding: 'var(--space-xl)' }}>
+        <h2 style={{ fontSize: 'var(--text-3xl)', marginBottom: 'var(--space-md)' }}>Validation Results</h2>
+        <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-base)', marginBottom: 'var(--space-xl)' }}>
+          Performance metrics from offline validation on the KeyRecs dataset
+        </p>
+
+        <div style={{
+          background: 'rgba(99, 102, 241, 0.1)',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+          borderRadius: '12px',
+          padding: 'var(--space-xl)',
+          marginBottom: 'var(--space-xl)'
+        }}>
+          <h3 style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-md)' }}>Equal Error Rate (EER)</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-lg)' }}>
+            <div>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-xs)' }}>
+                IsolationForest
+              </div>
+              <div style={{ fontSize: 'var(--text-4xl)', fontWeight: 700, color: 'var(--color-primary)' }}>
+                24.43%
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-xs)' }}>
+                OneClassSVM
+              </div>
+              <div style={{ fontSize: 'var(--text-4xl)', fontWeight: 700, color: 'var(--color-text-muted)' }}>
+                ~28%
+              </div>
+            </div>
+          </div>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', marginTop: 'var(--space-md)' }}>
+            Lower is better. Measured on 10 users from KeyRecs free-text subset with window_size=50.
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xl)' }}>
+          <div>
+            <h3 style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-md)' }}>ROC Curve</h3>
+            <img 
+              src="/figures/roc_curve.png" 
+              alt="ROC Curve"
+              style={{ width: '100%', borderRadius: '8px', border: '1px solid var(--border-color)' }}
+              onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
+            />
+            <div style={{ display: 'none', padding: 'var(--space-xl)', textAlign: 'center', color: 'var(--color-text-muted)', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+              Figure not available. Run scripts/run_validation.py to generate.
+            </div>
+          </div>
+
+          <div>
+            <h3 style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-md)' }}>Takeover Detection</h3>
+            <img 
+              src="/figures/takeover_detection.png" 
+              alt="Takeover Detection Chart"
+              style={{ width: '100%', borderRadius: '8px', border: '1px solid var(--border-color)' }}
+              onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }}
+            />
+            <div style={{ display: 'none', padding: 'var(--space-xl)', textAlign: 'center', color: 'var(--color-text-muted)', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+              Figure not available. Run scripts/run_validation.py to generate.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+

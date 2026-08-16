@@ -3,7 +3,11 @@ CONTINUOUS KEYSTROKE AUTHENTICATION - ML VALIDATION REPORT
 
 Dataset used: KeyRecs free-text subset
 Total events loaded: 562578
-Window size: 50 digraphs (optimized for EER)
+
+--- Window Size Comparison ---
+window_size=30: EER = 26.05%
+window_size=50: EER = 24.43%
+Selected window size: 50 (best EER)
 
 --- Takeover Simulation (User p001 model vs User p002 attacker) ---
 Spliced windows: 5 genuine, 10 attacker
@@ -28,6 +32,12 @@ Takeover detection status: SUCCESS (Triggered at window 7, lag=2 windows)
 --- Cross-User Population Metrics (10 Users) ---
 Total genuine test windows evaluated: 325
 Total impostor test windows evaluated: 2925
-Equal Error Rate (EER): 24.43% at threshold = 0.4992
+
+Model Comparison:
+IsolationForest - Equal Error Rate (EER): 24.43% at threshold = 0.4992
+OneClassSVM - Equal Error Rate (EER): 31.86% at threshold = -0.0063
+Best model: IsolationForest (lower EER is better)
+
+IsolationForest Performance at Calibrated Thresholds:
 FAR/FRR at low_cut threshold (0.5124): FAR=29.30%, FRR=20.62%
 FAR/FRR at high_cut threshold (0.5653): FAR=53.20%, FRR=10.46%

@@ -113,20 +113,15 @@ async def signup(credentials: UserAuthSchema):
     if existing:
         logger.warning(f"Signup rejected: username {username} already exists")
         raise HTTPException(status_code=400, detail="Username already exists")
-        
-    # Generate user-specific MFA PIN (last 4 digits of hash)
-    import hashlib
-    mfa_pin = hashlib.sha256(username.encode()).hexdigest()[-4:]
     
     pwd_hash = hash_password(password)
     users_col.insert_one({
         "username": username,
         "password_hash": pwd_hash,
-        "mfa_pin": mfa_pin,
         "created_at": datetime.utcnow()
     })
-    logger.info(f"User {username} created successfully with MFA PIN: {mfa_pin}")
-    return {"message": "User created successfully", "mfa_pin": mfa_pin}
+    logger.info(f"User {username} created successfully")
+    return {"message": "User created successfully"}
 
 @app.post("/login")
 async def login(credentials: UserAuthSchema):
@@ -139,8 +134,7 @@ async def login(credentials: UserAuthSchema):
     return {
         "token": token,
         "username": username,
-        "user_id": str(user["_id"]),
-        "mfa_pin": user.get("mfa_pin", "0000")  # Return user's MFA PIN
+        "user_id": str(user["_id"])
     }
 
 @app.post("/logout")
@@ -381,7 +375,6 @@ async def session_score(session_id: str, user_id: str = Depends(get_current_user
         })
         return {
             "risk_level": "initializing",
-            "action_required": "ALLOW_ACCESS",
             "score_history": [],
             "total_windows": 0,
             "message": f"Type to initialize authentication. Keystrokes logged: {event_count}"
@@ -402,20 +395,14 @@ async def session_score(session_id: str, user_id: str = Depends(get_current_user
             
     latest_risk = scores[-1]["risk_level"]
     
-    # Three-tier trust scoring with step-up MFA
+    # Simple risk level reporting
     if flagged:
         session_risk = "flagged"
-        action_required = "TERMINATE_SESSION"
-    elif latest_risk == "medium" or consecutive_hijack_count == 2:
-        session_risk = "suspicious"
-        action_required = "PROMPT_MFA_CHALLENGE"
     else:
-        session_risk = "low"
-        action_required = "ALLOW_ACCESS"
+        session_risk = latest_risk
     
     return {
         "risk_level": session_risk,
-        "action_required": action_required,
         "score_history": scores,
         "total_windows": len(scores)
     }

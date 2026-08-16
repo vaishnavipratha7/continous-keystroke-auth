@@ -64,7 +64,7 @@ def evaluate_window_size(df, window_size):
         model = user_models[u_model]
         test_win = user_test_windows[u_model]
         if len(test_win) > 0:
-            gen_scores = -model.score_samples(test_win[FEATURE_NAMES].values)
+            gen_scores = model.score_samples(test_win[FEATURE_NAMES].values)
             all_gen_scores.extend(gen_scores)
             
         for u_imp in user_models.keys():
@@ -72,7 +72,7 @@ def evaluate_window_size(df, window_size):
                 continue
             imp_win = user_test_windows[u_imp]
             if len(imp_win) > 0:
-                imp_scores = -model.score_samples(imp_win[FEATURE_NAMES].values)
+                imp_scores = model.score_samples(imp_win[FEATURE_NAMES].values)
                 all_imp_scores.extend(imp_scores)
     
     if len(all_gen_scores) == 0 or len(all_imp_scores) == 0:
@@ -302,7 +302,7 @@ def run_validation():
         model = user_models[u_model]
         test_win = user_test_windows[u_model]
         if len(test_win) > 0:
-            gen_scores = -model.score_samples(test_win[FEATURE_NAMES].values)
+            gen_scores = model.score_samples(test_win[FEATURE_NAMES].values)
             all_gen_scores.extend(gen_scores)
             
         for u_imp in user_models.keys():
@@ -310,7 +310,7 @@ def run_validation():
                 continue
             imp_win = user_test_windows[u_imp]
             if len(imp_win) > 0:
-                imp_scores = -model.score_samples(imp_win[FEATURE_NAMES].values)
+                imp_scores = model.score_samples(imp_win[FEATURE_NAMES].values)
                 all_imp_scores.extend(imp_scores)
         
         # OneClassSVM

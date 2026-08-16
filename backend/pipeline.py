@@ -124,8 +124,10 @@ def train_user_model(X_train):
 
 def calibrate_thresholds(model, X_enroll):
     """
-    Computes low/high risk thresholds using the 90th and 99th percentile of enrollment scores.
+    Computes low/high risk thresholds using the 50th and 95th percentile of enrollment scores.
     Score is positive: higher = more anomalous.
+    Medium threshold at 50th percentile allows some natural variation, 
+    high threshold at 95th percentile captures clear anomalies.
     """
     if isinstance(X_enroll, pd.DataFrame):
         X_enroll_vals = X_enroll[FEATURE_NAMES].values
@@ -134,8 +136,16 @@ def calibrate_thresholds(model, X_enroll):
         
     anomaly_scores = model.score_samples(X_enroll_vals)
     
-    low_cut = np.percentile(anomaly_scores, 90)
-    high_cut = np.percentile(anomaly_scores, 99)
+    # Use 50th and 95th percentiles to create meaningful thresholds
+    # even when enrollment data has low variance
+    low_cut = np.percentile(anomaly_scores, 50)
+    high_cut = np.percentile(anomaly_scores, 95)
+    
+    # Ensure thresholds are actually different
+    if np.isclose(low_cut, high_cut):
+        # If scores are too similar, add a small offset to create separation
+        offset = max(abs(low_cut) * 0.1, 0.01)
+        high_cut = low_cut + offset
     
     return low_cut, high_cut
 

@@ -36,7 +36,7 @@ def extract_digraphs(events_df):
                 'down_time1': downs[i],
                 'up_time2': ups[i+1]
             })
-        
+         
     return pd.DataFrame(digraphs)
 
 def compute_windows(digraphs_df, window_size=50):
@@ -86,6 +86,7 @@ class BiometricProfileWrapper:
     """
     Wrapper around IsolationForest with StandardScaler for better feature balance.
     Prevents typing_speed from overwhelming millisecond-precision timing features.
+    Uses robust variance-based weighting to handle low-variance training data.
     """
     def __init__(self, n_estimators=200, contamination=0.05):
         self.scaler = StandardScaler()
@@ -95,18 +96,48 @@ class BiometricProfileWrapper:
             random_state=42,
             max_features=len(FEATURE_NAMES)
         )
+        self.feature_variance = None
     
     def fit(self, X):
-        """Fit scaler and model."""
+        """Fit scaler and model, store feature variances."""
         X_scaled = self.scaler.fit_transform(X)
+        # Store variances for later use in scoring
+        self.feature_variance = np.var(X_scaled, axis=0)
         self.model.fit(X_scaled)
         return self
     
     def score_samples(self, X):
-        """Return anomaly scores (higher = more anomalous)."""
+        """
+        Return anomaly scores (higher = more anomalous).
+        Uses Mahalanobis-like distance weighting for better anomaly detection.
+        """
         X_scaled = self.scaler.transform(X)
-        # IsolationForest returns negative scores, invert to positive
-        return -self.model.score_samples(X_scaled)
+        
+        # Get base isolation forest scores
+        iso_scores = -self.model.score_samples(X_scaled)
+        
+        # Apply variance-weighted distance calculation for better discrimination
+        # This helps detect anomalies even when training data has low variance
+        feature_means = self.scaler.mean_
+        weighted_distances = []
+        
+        for sample in X_scaled:
+            # Calculate weighted Euclidean distance using feature variance
+            distances = np.abs(sample - feature_means)
+            # Add small epsilon to prevent division by zero
+            variance_weights = 1.0 / (self.feature_variance + 1e-8)
+            # Normalize weights
+            variance_weights = variance_weights / np.sum(variance_weights)
+            weighted_distance = np.sum(distances * variance_weights)
+            weighted_distances.append(weighted_distance)
+        
+        weighted_distances = np.array(weighted_distances)
+        
+        # Combine isolation forest score with variance-weighted distance
+        # This gives us better separation for anomalies
+        combined_scores = iso_scores + weighted_distances
+        
+        return combined_scores
 
 def train_user_model(X_train):
     """

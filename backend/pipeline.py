@@ -44,7 +44,7 @@ def compute_windows(digraphs_df, window_size=50):
     Splits digraphs stream into sequential non-overlapping windows of window_size digraphs.
     
     Window size of 50 digraphs chosen based on EER validation testing on KeyRecs dataset.
-    Measured performance: window_size=50 achieves 24.43% EER vs window_size=30 at 26.89% EER.
+    Measured performance: window_size=50 achieves 24.43% EER vs window_size=30 at 26.05% EER.
     
     For each window compute a feature vector:
     dwell_mean, dwell_std, flight_mean, flight_std, typing_speed.

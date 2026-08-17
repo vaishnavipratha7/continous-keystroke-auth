@@ -38,3 +38,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Internal documentation (local only)
+docs/

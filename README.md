@@ -2,8 +2,6 @@
 
 Real-time session hijacking detection using typing rhythm and unsupervised machine learning.
 
----
-
 ## Overview
 
 This system extends keystroke authentication from one-time login verification to continuous in-session monitoring. Each user gets their own Isolation Forest model trained only on their typing patterns - no labeled attacker data required.

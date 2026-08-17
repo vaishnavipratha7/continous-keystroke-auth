@@ -378,8 +378,10 @@ function LoginView({ handleLoginSuccess, setPage, setError }) {
       if (!res.ok) {
         throw new Error(data.detail || 'Login failed.');
       }
-      // Store user-specific MFA PIN for verification challenges
-      localStorage.setItem('mfaPin', data.mfa_pin || '0000');
+      // Store MFA PIN for verification challenges
+      if (data.mfa_pin) {
+        localStorage.setItem('mfaPin', data.mfa_pin);
+      }
       handleLoginSuccess(data.token, data.username);
     } catch (err) {
       setError(err.message);
@@ -466,8 +468,8 @@ function SignupView({ setPage, setError, setInfo }) {
       if (!res.ok) {
         throw new Error(data.detail || 'Signup failed.');
       }
-      // Display user's unique MFA PIN
-      setInfo(`Account created! Your security PIN is: ${data.mfa_pin}. Save this for verification challenges.`);
+      // Display user's unique MFA PIN - they need to remember this
+      setInfo(`Account created! Your security PIN is: ${data.mfa_pin}. Save this PIN - you'll need it to verify your identity if the system detects unusual typing patterns.`);
       setPage('login');
     } catch (err) {
       setError(err.message);
@@ -764,10 +766,30 @@ function SessionView({ token, username, setError, setConnectionError }) {
   const lastKeystrokeTimeRef = useRef(Date.now());
   
   // Reset consecutive window buffer after MFA success
-  const handleMFASuccess = () => {
-    setRiskState('low');
-    setSessionRiskData({ action_required: "ALLOW_ACCESS" });
-    // Could also call backend endpoint to reset consecutive count if needed
+  const handleMFASuccess = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/session/verify_mfa`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          pin: localStorage.getItem('mfaPin'),
+          session_id: sessionId
+        })
+      });
+      
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setRiskState('low');
+        setSessionRiskData({ action_required: "ALLOW_ACCESS" });
+        // Refresh score to get updated state
+        fetchSessionScore();
+      }
+    } catch (err) {
+      console.error('MFA reset failed:', err);
+    }
   };
 
   // Fetch score history from backend
@@ -1177,11 +1199,12 @@ function SessionView({ token, username, setError, setConnectionError }) {
       {(sessionRiskData.action_required === "PROMPT_MFA_CHALLENGE" || sessionRiskData.action_required === "TERMINATE_SESSION") && (
         <div style={{ gridColumn: '1 / -1' }}>
           <SessionSecurityMonitor
-  sessionRiskState={sessionRiskData}
-  onResetSession={handleMFASuccess}
-  userMfaPin={userMfaPin}
-/>
-
+            sessionRiskState={sessionRiskData}
+            onResetSession={handleMFASuccess}
+            userMfaPin={userMfaPin}
+            token={token}
+            sessionId={sessionId}
+          />
         </div>
       )}
       
@@ -1737,9 +1760,10 @@ function ResultsView() {
 
 
 // MFA CHALLENGE COMPONENT
-function SessionSecurityMonitor({ sessionRiskState, onResetSession, userMfaPin }) {
+function SessionSecurityMonitor({ sessionRiskState, onResetSession, userMfaPin, token, sessionId }) {
   const [pinInput, setPinInput] = useState("");
   const [mfaError, setMfaError] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   
   if (sessionRiskState.action_required === "TERMINATE_SESSION") {
     return (
@@ -1778,18 +1802,47 @@ function SessionSecurityMonitor({ sessionRiskState, onResetSession, userMfaPin }
   }
   
   if (sessionRiskState.action_required === "PROMPT_MFA_CHALLENGE") {
-    const handleVerifyPin = (e) => {
+    const handleVerifyPin = async (e) => {
       e.preventDefault();
       const trimmedPin = pinInput.trim();
-      console.log('Entered PIN:', trimmedPin, 'Expected PIN:', userMfaPin);
       
-      if (trimmedPin === userMfaPin) {
-        setPinInput("");
-        setMfaError(false);
-        onResetSession(); // Clear buffer and continue
-      } else {
+      if (trimmedPin.length !== 4) {
         setMfaError(true);
-        setPinInput(""); // Clear incorrect input
+        return;
+      }
+      
+      setVerifying(true);
+      setMfaError(false);
+      
+      try {
+        const res = await fetch(`${API_BASE}/session/verify_mfa`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            pin: trimmedPin,
+            session_id: sessionId
+          })
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok && data.success) {
+          setPinInput("");
+          setMfaError(false);
+          onResetSession(); // Notify parent to refresh state
+        } else {
+          setMfaError(true);
+          setPinInput("");
+        }
+      } catch (err) {
+        console.error('MFA verification error:', err);
+        setMfaError(true);
+        setPinInput("");
+      } finally {
+        setVerifying(false);
       }
     };
   
@@ -1821,12 +1874,14 @@ function SessionSecurityMonitor({ sessionRiskState, onResetSession, userMfaPin }
         </p>
         <form onSubmit={handleVerifyPin}>
           <input 
-            type="password" 
+            type="text"
+            inputMode="numeric"
             maxLength={4} 
             className="form-control" 
-            placeholder={`Enter Your 4-Digit PIN`} 
+            placeholder="Enter Your 4-Digit PIN" 
             value={pinInput}
-            onChange={(e) => setPinInput(e.target.value)}
+            onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ''))}
+            disabled={verifying}
             style={{ 
               textAlign: 'center', 
               letterSpacing: '8px', 
@@ -1840,8 +1895,8 @@ function SessionSecurityMonitor({ sessionRiskState, onResetSession, userMfaPin }
               Invalid verification code. Try again.
             </p>
           )}
-          <button type="submit" className="btn-primary">
-            Confirm Identity
+          <button type="submit" className="btn-primary" disabled={verifying || pinInput.length !== 4}>
+            {verifying ? 'Verifying...' : 'Confirm Identity'}
           </button>
         </form>
       </div>

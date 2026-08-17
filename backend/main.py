@@ -105,37 +105,66 @@ async def signup(credentials: UserAuthSchema):
     if not username or username.isspace():
         logger.warning(f"Signup rejected: empty username")
         raise HTTPException(status_code=400, detail="Username cannot be empty or only whitespace")
+    
+    # Validate username format (alphanumeric + underscore only)
+    import re
+    if not re.match(r'^[a-zA-Z0-9_]{3,20}$', username):
+        logger.warning(f"Signup rejected: invalid username format: {username}")
+        raise HTTPException(status_code=400, detail="Username must be 3-20 characters, alphanumeric and underscore only")
+    
     if not password or len(password) < 8:
         logger.warning(f"Signup rejected: password too short for user {username}")
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
-        
-    existing = get_user_by_username(username)
-    if existing:
-        logger.warning(f"Signup rejected: username {username} already exists")
-        raise HTTPException(status_code=400, detail="Username already exists")
     
-    pwd_hash = hash_password(password)
-    users_col.insert_one({
-        "username": username,
-        "password_hash": pwd_hash,
-        "created_at": datetime.utcnow()
-    })
-    logger.info(f"User {username} created successfully")
-    return {"message": "User created successfully"}
+    try:
+        existing = get_user_by_username(username)
+        if existing:
+            logger.warning(f"Signup rejected: username {username} already exists")
+            raise HTTPException(status_code=400, detail="Username already exists")
+        
+        pwd_hash = hash_password(password)
+        # Generate a random 4-digit MFA PIN for user
+        import random
+        mfa_pin = str(random.randint(1000, 9999))
+        
+        users_col.insert_one({
+            "username": username,
+            "password_hash": pwd_hash,
+            "mfa_pin": mfa_pin,
+            "created_at": datetime.utcnow()
+        })
+        logger.info(f"User {username} created successfully with MFA PIN")
+        return {
+            "message": "User created successfully",
+            "mfa_pin": mfa_pin
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Database error during signup for {username}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Database error. Please try again later.")
 
 @app.post("/login")
 async def login(credentials: UserAuthSchema):
     username = credentials.username.strip()
-    user = get_user_by_username(username)
-    if not user or not verify_password(credentials.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-        
-    token = create_session(str(user["_id"]))
-    return {
-        "token": token,
-        "username": username,
-        "user_id": str(user["_id"])
-    }
+    
+    try:
+        user = get_user_by_username(username)
+        if not user or not verify_password(credentials.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+            
+        token = create_session(str(user["_id"]))
+        return {
+            "token": token,
+            "username": username,
+            "user_id": str(user["_id"]),
+            "mfa_pin": user.get("mfa_pin", "0000")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error for {username}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Authentication service error. Please try again.")
 
 @app.post("/logout")
 async def logout(authorization: Optional[str] = Header(None)):
@@ -149,24 +178,28 @@ async def logout(authorization: Optional[str] = Header(None)):
 async def enroll_keystrokes(batch: KeystrokeBatchSchema, user_id: str = Depends(get_current_user_id)):
     if not batch.events:
         raise HTTPException(status_code=400, detail="No keystroke events provided")
-        
-    event_docs = []
-    for ev in batch.events:
-        event_docs.append({
-            "user_id": user_id,
-            "session_id": "enrollment",
-            "key": ev.key,
-            "down_time": ev.down_time,
-            "up_time": ev.up_time,
-            "type": "enrollment",
-            "timestamp": datetime.utcnow()
-        })
-        
-    keystroke_events_col.insert_many(event_docs)
     
-    # Return count of total enrollment keystrokes for this user
-    total_count = keystroke_events_col.count_documents({"user_id": user_id, "type": "enrollment"})
-    return {"message": f"Saved {len(batch.events)} events.", "total_enrollment_keystrokes": total_count}
+    try:
+        event_docs = []
+        for ev in batch.events:
+            event_docs.append({
+                "user_id": user_id,
+                "session_id": "enrollment",
+                "key": ev.key,
+                "down_time": ev.down_time,
+                "up_time": ev.up_time,
+                "type": "enrollment",
+                "timestamp": datetime.utcnow()
+            })
+            
+        keystroke_events_col.insert_many(event_docs)
+        
+        # Return count of total enrollment keystrokes for this user
+        total_count = keystroke_events_col.count_documents({"user_id": user_id, "type": "enrollment"})
+        return {"message": f"Saved {len(batch.events)} events.", "total_enrollment_keystrokes": total_count}
+    except Exception as e:
+        logger.error(f"Error saving enrollment keystrokes for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to save keystroke data. Please try again.")
 
 @app.post("/enroll/train")
 async def enroll_train(user_id: str = Depends(get_current_user_id)):
@@ -377,22 +410,31 @@ async def session_score(session_id: str, user_id: str = Depends(get_current_user
             "risk_level": "initializing",
             "score_history": [],
             "total_windows": 0,
+            "action_required": "ALLOW_ACCESS",
             "message": f"Type to initialize authentication. Keystrokes logged: {event_count}"
         }
         
-    # Determine risk level with consecutive window logic
+    # Determine risk level with consecutive window logic for MFA challenge
     consecutive_hijack_count = 0
     flagged = False
+    action_required = "ALLOW_ACCESS"
     
-    for s in scores:
+    # Count consecutive medium/high risk windows from the end
+    for s in reversed(scores):
         if s["risk_level"] in ["medium", "high"]:
             consecutive_hijack_count += 1
         else:
-            consecutive_hijack_count = 0
+            break
             
-        if consecutive_hijack_count >= 3:
-            flagged = True
-            
+    # MFA Challenge: 2 consecutive medium/high windows
+    if consecutive_hijack_count == 2:
+        action_required = "PROMPT_MFA_CHALLENGE"
+        
+    # Terminate: 3+ consecutive medium/high windows
+    if consecutive_hijack_count >= 3:
+        flagged = True
+        action_required = "TERMINATE_SESSION"
+    
     latest_risk = scores[-1]["risk_level"]
     
     # Simple risk level reporting
@@ -404,7 +446,58 @@ async def session_score(session_id: str, user_id: str = Depends(get_current_user
     return {
         "risk_level": session_risk,
         "score_history": scores,
-        "total_windows": len(scores)
+        "total_windows": len(scores),
+        "action_required": action_required,
+        "consecutive_warnings": consecutive_hijack_count
+    }
+
+
+@app.post("/session/verify_mfa")
+async def verify_mfa(request: dict, user_id: str = Depends(get_current_user_id)):
+    """
+    Verify user's MFA PIN and reset consecutive warning counter if correct.
+    This allows the user to continue their session after confirming identity.
+    """
+    pin_input = request.get("pin", "")
+    session_id = request.get("session_id", "")
+    
+    # Get user's MFA PIN
+    user = users_col.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    expected_pin = user.get("mfa_pin", "0000")
+    
+    if pin_input != expected_pin:
+        logger.warning(f"MFA verification failed for user {user_id}")
+        return {
+            "success": False,
+            "message": "Invalid PIN"
+        }
+    
+    # PIN is correct - mark the last 2 medium/high risk windows as "verified" (reset to low)
+    # This resets the consecutive counter
+    logger.info(f"MFA verification successful for user {user_id}, session {session_id}")
+    
+    # Get the last 2 windows and update them to "low" risk
+    scores_cursor = session_scores_col.find({
+        "user_id": user_id,
+        "session_id": session_id,
+        "risk_level": {"$in": ["medium", "high"]}
+    }).sort("window_index", -1).limit(2)
+    
+    updated_count = 0
+    for score in scores_cursor:
+        session_scores_col.update_one(
+            {"_id": score["_id"]},
+            {"$set": {"risk_level": "low", "mfa_verified": True}}
+        )
+        updated_count += 1
+    
+    return {
+        "success": True,
+        "message": "Identity verified successfully",
+        "windows_reset": updated_count
     }
 
 @app.get("/session/explain/{window_index}")

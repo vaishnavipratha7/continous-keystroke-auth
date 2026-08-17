@@ -25,6 +25,8 @@ from backend.db import (
 from backend.auth import (
     hash_password,
     verify_password,
+    hash_pin,
+    verify_pin,
     create_session,
     get_user_id_from_token,
     delete_session
@@ -126,14 +128,17 @@ async def signup(credentials: UserAuthSchema):
         # Generate a random 4-digit MFA PIN for user
         import random
         mfa_pin = str(random.randint(1000, 9999))
+        mfa_pin_hash = hash_pin(mfa_pin)  # Hash the PIN before storing
         
         users_col.insert_one({
             "username": username,
             "password_hash": pwd_hash,
-            "mfa_pin": mfa_pin,
+            "mfa_pin_hash": mfa_pin_hash,  # Store hash only, never plaintext
+            "mfa_attempts": 0,  # Track failed verification attempts
             "created_at": datetime.utcnow()
         })
         logger.info(f"User {username} created successfully with MFA PIN")
+        # Return plaintext PIN only once at signup - user must save it
         return {
             "message": "User created successfully",
             "mfa_pin": mfa_pin
@@ -154,11 +159,11 @@ async def login(credentials: UserAuthSchema):
             raise HTTPException(status_code=401, detail="Invalid username or password")
             
         token = create_session(str(user["_id"]))
+        # Don't return MFA PIN - user already saved it at signup
         return {
             "token": token,
             "username": username,
-            "user_id": str(user["_id"]),
-            "mfa_pin": user.get("mfa_pin", "0000")
+            "user_id": str(user["_id"])
         }
     except HTTPException:
         raise
@@ -456,30 +461,48 @@ async def session_score(session_id: str, user_id: str = Depends(get_current_user
 async def verify_mfa(request: dict, user_id: str = Depends(get_current_user_id)):
     """
     Verify user's MFA PIN and reset consecutive warning counter if correct.
-    This allows the user to continue their session after confirming identity.
+    Includes rate limiting: max 5 attempts before account lockout.
     """
     pin_input = request.get("pin", "")
     session_id = request.get("session_id", "")
     
-    # Get user's MFA PIN
+    # Get user document
     user = users_col.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    expected_pin = user.get("mfa_pin", "0000")
+    # Rate limiting: check failed attempt count
+    attempts = user.get("mfa_attempts", 0)
+    if attempts >= 5:
+        logger.warning(f"MFA rate limit exceeded for user {user_id}")
+        raise HTTPException(
+            status_code=429, 
+            detail="Too many failed verification attempts. Please log out and log in again to reset."
+        )
     
-    if pin_input != expected_pin:
-        logger.warning(f"MFA verification failed for user {user_id}")
+    # Verify PIN against bcrypt hash
+    mfa_pin_hash = user.get("mfa_pin_hash", "")
+    if not verify_pin(pin_input, mfa_pin_hash):
+        # Increment failed attempt counter
+        users_col.update_one(
+            {"_id": user["_id"]}, 
+            {"$inc": {"mfa_attempts": 1}}
+        )
+        logger.warning(f"MFA verification failed for user {user_id} (attempt {attempts + 1}/5)")
         return {
             "success": False,
-            "message": "Invalid PIN"
+            "message": "Invalid PIN",
+            "attempts_remaining": 5 - (attempts + 1)
         }
     
-    # PIN is correct - mark the last 2 medium/high risk windows as "verified" (reset to low)
-    # This resets the consecutive counter
+    # PIN is correct - reset attempt counter and mark windows as verified
+    users_col.update_one(
+        {"_id": user["_id"]}, 
+        {"$set": {"mfa_attempts": 0}}
+    )
     logger.info(f"MFA verification successful for user {user_id}, session {session_id}")
     
-    # Get the last 2 windows and update them to "low" risk
+    # Get the last 2 windows and update them to "low" risk (reset consecutive counter)
     scores_cursor = session_scores_col.find({
         "user_id": user_id,
         "session_id": session_id,

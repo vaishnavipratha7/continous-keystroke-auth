@@ -378,10 +378,7 @@ function LoginView({ handleLoginSuccess, setPage, setError }) {
       if (!res.ok) {
         throw new Error(data.detail || 'Login failed.');
       }
-      // Store MFA PIN for verification challenges
-      if (data.mfa_pin) {
-        localStorage.setItem('mfaPin', data.mfa_pin);
-      }
+      // Don't store MFA PIN - user already has it from signup
       handleLoginSuccess(data.token, data.username);
     } catch (err) {
       setError(err.message);
@@ -468,8 +465,12 @@ function SignupView({ setPage, setError, setInfo }) {
       if (!res.ok) {
         throw new Error(data.detail || 'Signup failed.');
       }
-      // Display user's unique MFA PIN - they need to remember this
-      setInfo(`Account created! Your security PIN is: ${data.mfa_pin}. Save this PIN - you'll need it to verify your identity if the system detects unusual typing patterns.`);
+      // Display user's unique MFA PIN once - they must save it!
+      setInfo(`✅ Account created! Your security PIN is: ${data.mfa_pin}. 
+      
+⚠️ IMPORTANT: Save this PIN now! You'll need it if the system detects unusual typing patterns. This PIN will NOT be shown again.`);
+      // Store it in localStorage so they can use it during this browser session
+      localStorage.setItem('mfaPin', data.mfa_pin);
       setPage('login');
     } catch (err) {
       setError(err.message);
@@ -1834,12 +1835,16 @@ function SessionSecurityMonitor({ sessionRiskState, onResetSession, userMfaPin, 
           setMfaError(false);
           onResetSession(); // Notify parent to refresh state
         } else {
-          setMfaError(true);
+          // Show error with attempts remaining if available
+          const errorMsg = data.attempts_remaining !== undefined
+            ? `Invalid PIN. ${data.attempts_remaining} attempts remaining.`
+            : data.message || "Invalid PIN";
+          setMfaError(errorMsg);
           setPinInput("");
         }
       } catch (err) {
         console.error('MFA verification error:', err);
-        setMfaError(true);
+        setMfaError("Verification failed. Please try again.");
         setPinInput("");
       } finally {
         setVerifying(false);
@@ -1892,7 +1897,7 @@ function SessionSecurityMonitor({ sessionRiskState, onResetSession, userMfaPin, 
           />
           {mfaError && (
             <p style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-sm)' }}>
-              Invalid verification code. Try again.
+              {typeof mfaError === 'string' ? mfaError : 'Invalid verification code. Try again.'}
             </p>
           )}
           <button type="submit" className="btn-primary" disabled={verifying || pinInput.length !== 4}>

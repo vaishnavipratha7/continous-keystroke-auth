@@ -4,6 +4,18 @@
 
 The Multi-Factor Authentication (MFA) challenge feature provides an additional security layer when the keystroke authentication system detects suspicious typing patterns. Instead of immediately terminating the session, it gives the legitimate user a chance to verify their identity using a 4-digit PIN.
 
+### ⚠️ Important Context & Framing
+
+**This MFA feature is NOT a gap identified in the Martins et al. paper.** The paper's four main gaps are:
+1. No monitoring after login (static authentication)
+2. Static models that don't adapt over time
+3. Need for labeled attacker data
+4. Lack of explainability
+
+**MFA is a design decision for handling false positives** in our own continuous monitoring system (which addresses gap #1). When we implemented continuous authentication, we had to decide what to do when it flags something. Instant lockout is harsh for false positives caused by natural typing variation (fatigue, different keyboard, injury, etc.). MFA provides a "step-up verification" instead of a hard cutoff.
+
+**In your project report/viva:** Frame MFA as your engineering solution to a second-order problem created by your own system (false positive management), not as a literal gap-fill from the paper. This shows you thought about the practical implications of deploying continuous authentication, not just implementing the core algorithm.
+
 ---
 
 ## 🎯 How It Works
@@ -328,24 +340,44 @@ User enters PIN
 
 ## 🔒 Security Considerations
 
-### ✅ Security Strengths
+### ✅ Security Strengths (After Security Fixes)
 1. **Two-factor authentication:** Combines keystroke biometrics + PIN
 2. **Adaptive response:** Doesn't immediately lock out on first anomaly
-3. **Backend validation:** PIN verified server-side, not client-side
-4. **Audit trail:** MFA verifications logged in database
+3. **Backend validation:** PIN verified server-side with bcrypt hashing
+4. **Hashed storage:** PIN stored as bcrypt hash, never plaintext
+5. **Rate limiting:** Max 5 verification attempts before account lockout
+6. **Audit trail:** MFA verifications logged in database
+7. **One-time PIN exposure:** PIN shown only once at signup
 
-### ⚠️ Security Limitations
-1. **PIN storage:** Stored in plain text in MongoDB (consider hashing)
-2. **LocalStorage:** PIN accessible to JavaScript (consider httpOnly cookies)
-3. **No rate limiting:** Unlimited PIN attempts (add after 3 failures)
-4. **Static PIN:** Same PIN forever (consider rotation or TOTP)
+### ✅ Implementation Details
+- **PIN Hashing:** Uses bcrypt (same as password hashing) - computationally expensive to crack
+- **No plaintext storage:** Database stores `mfa_pin_hash`, not the actual PIN
+- **No re-exposure:** Login endpoint doesn't return PIN - user must save it at signup
+- **Attempt tracking:** `mfa_attempts` counter increments on failed verification
+- **Lockout on abuse:** After 5 failed attempts, returns HTTP 429, requires re-login to reset
 
-### 🛡️ Recommended Improvements
-1. Hash MFA PIN using bcrypt before storing
-2. Add rate limiting: 3 failed attempts → lock account for 15 minutes
-3. Implement PIN expiration: Force rotation every 90 days
-4. Consider TOTP (Google Authenticator) instead of static PIN
-5. Add email/SMS notification when MFA is triggered
+### 🛡️ Security Trade-offs & Future Improvements
+1. **PIN complexity:** 4 digits = 10,000 combinations (brute-forceable with rate limiting bypass)
+   - **Improvement:** Consider 6-digit PIN (1M combinations) or alphanumeric (36^6 = 2.1B)
+2. **Static PIN:** Same PIN forever unless user re-registers
+   - **Improvement:** Implement PIN rotation every 90 days
+3. **No TOTP:** Static PIN vs. time-based one-time password
+   - **Improvement:** Consider TOTP (Google Authenticator) for high-security deployments
+4. **LocalStorage:** PIN stored in browser localStorage during signup session
+   - **Improvement:** Clear PIN from localStorage after first login
+5. **Account lockout:** Requires full logout/login to reset attempts
+   - **Improvement:** Add time-based cooldown (15 min) instead of permanent lockout
+
+### 📊 Security Comparison
+
+| Feature | Before Security Fixes | After Security Fixes |
+|---------|----------------------|---------------------|
+| PIN Storage | Plaintext in MongoDB | Bcrypt hash |
+| PIN Exposure | Returned on every login | Shown once at signup |
+| Verification | Client-side comparison | Server-side bcrypt check |
+| Rate Limiting | None | 5 attempts max |
+| Brute Force | Easy (plaintext) | Computationally expensive |
+| Audit Trail | Minimal | Full logging + attempt tracking |
 
 ---
 
@@ -381,17 +413,39 @@ if consecutive_hijack_count >= 2:  # Change from 3 to 2
 ## ✅ Verification Checklist
 
 - [x] Backend generates random 4-digit PIN on signup
-- [x] PIN stored in user document
-- [x] PIN returned in login response
-- [x] Frontend stores PIN in localStorage
+- [x] PIN hashed with bcrypt before storage (never plaintext)
+- [x] PIN returned only once (at signup, not login)
+- [x] Frontend shows PIN with warning to save it
+- [x] Frontend stores PIN in localStorage temporarily
 - [x] Backend tracks consecutive risk windows
 - [x] `/session/score` returns `action_required` field
 - [x] MFA modal appears at 2 consecutive warnings
 - [x] PIN verification endpoint (`/session/verify_mfa`)
+- [x] Server-side bcrypt verification (not client-side)
+- [x] Rate limiting: 5 attempts max per user
+- [x] Failed attempts tracked in database
 - [x] Successful verification resets consecutive counter
-- [x] Failed verification shows error message
+- [x] Failed verification shows error + attempts remaining
 - [x] Session terminates at 3+ consecutive warnings
 - [x] Lockout screen displays on termination
+
+---
+
+## 🧪 Testing Notes
+
+### About the "Demo: Synthetic Attack" Button
+
+**Important:** The synthetic attack button is a UI convenience for demonstrating the MFA flow, **NOT evidence that your model discriminates real human behavior.** 
+
+Your actual validation evidence comes from:
+- **`scripts/run_validation.py`:** Splice test with two real participants (p001 vs p002 from KeyRecs dataset)
+- **Measured metrics:** EER, FAR, FRR, detection latency
+- **Real keystroke patterns:** 150+ real users, 30K+ keystroke events
+
+**In your demo:** Lead with the validation results first, then use the synthetic attack button as a visual demonstration of the MFA workflow. Be explicit that:
+1. The button injects artificially extreme timing values (2.5s flights, 1.5s dwells)
+2. Real attack detection uses genuine typing from different users
+3. Validation testing shows the model discriminates between real human typing patterns
 
 ---
 

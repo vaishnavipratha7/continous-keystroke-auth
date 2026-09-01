@@ -14,12 +14,12 @@ If someone gets past login (a stolen session, an unattended unlocked machine), n
 
 ## The Approach
 
-This project builds a **continuous** verification layer on top of that gap:
+This project builds a **continuous** verification layer on top of that gap. This mirrors commercial continuous-authentication products (e.g., BioCatch, TypingDNA) used for shared-workstation and account-takeover detection, implemented here at prototype scale on a public research dataset.
 
 - **Per-user, unsupervised models** — each user gets their own Isolation Forest, trained only on *their own* enrollment typing. No impostor data required, unlike the original supervised approach.
 - **Windowed monitoring** — typing is split into 50-keystroke windows, each scored against the user's personal baseline in real time throughout the session, not just at login.
 - **Smoothed risk decisions** — a session is only flagged after 3 consecutive medium/high-risk windows, so a single tired or distracted moment doesn't trigger a false lockout.
-- **Step-up verification (MFA)** — instead of an instant hard lockout, sustained anomalies first prompt a PIN challenge, giving a legitimate user with naturally shifting typing a chance to confirm identity before the session is terminated.
+- **Step-up verification (MFA)** — instead of an instant hard lockout, sustained anomalies first prompt a PIN challenge, giving a legitimate user with naturally shifting typing a chance to confirm identity before the session is terminated. This production-realistic UX pattern handles false positives gracefully without immediate session termination.
 - **Adaptive learning** — a session confirmed safe on completion feeds back into the user's model, letting the baseline evolve with natural drift over time.
 - **Explainability** — every flagged window comes with a SHAP-based explanation of which specific behavioral feature (typing speed, key-hold time, inter-key timing) drove the anomaly score.
 
@@ -88,7 +88,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:5173` — sign up, enroll by typing the given passage, then watch the live risk dashboard as you type. Use the demo attack button to see detection trigger.
+Open `http://localhost:5173` — sign up, enroll by typing the given passage, then watch the live risk dashboard as you type. Use the "Demo: Synthetic Attack" button to simulate a shared-workstation handoff (someone else sits down at your unlocked machine).
 
 ## Reproducing the Results
 
@@ -111,7 +111,8 @@ python scripts/test_e2e.py   # full live flow: signup → enroll → session →
 
 ## What This Project Deliberately Does *Not* Claim
 
-- The **synthetic attack demo button** in the UI injects artificial extreme timing values to demonstrate the live UI reacting — it is not the accuracy evidence. The real evidence is `scripts/run_validation.py`'s splice test, which uses two real participants' actual recorded typing.
+- The **synthetic attack demo button** in the UI injects artificial extreme timing values to demonstrate the live UI reacting to a simulated shared-workstation handoff — it is not the accuracy evidence. The real evidence is `scripts/run_validation.py`'s splice test, which uses two real participants' actual recorded typing.
+- **A 24.43% EER means this prototype is not yet accurate enough for production deployment without further tuning or additional behavioral signals** (e.g., mouse dynamics, device fingerprinting) — but it demonstrates the mechanism and validation methodology a production system would need.
 - This extends a published paper's identified limitations as a research/learning exercise; it has not been load-tested, penetration-tested, or deployed for real users.
 
 

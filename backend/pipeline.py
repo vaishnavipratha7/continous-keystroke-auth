@@ -86,7 +86,6 @@ class BiometricProfileWrapper:
     """
     Wrapper around IsolationForest with StandardScaler for better feature balance.
     Prevents typing_speed from overwhelming millisecond-precision timing features.
-    Uses robust variance-based weighting to handle low-variance training data.
     """
     def __init__(self, n_estimators=200, contamination=0.05):
         self.scaler = StandardScaler()
@@ -96,48 +95,23 @@ class BiometricProfileWrapper:
             random_state=42,
             max_features=len(FEATURE_NAMES)
         )
-        self.feature_variance = None
     
     def fit(self, X):
-        """Fit scaler and model, store feature variances."""
+        """Fit scaler and model."""
         X_scaled = self.scaler.fit_transform(X)
-        # Store variances for later use in scoring
-        self.feature_variance = np.var(X_scaled, axis=0)
         self.model.fit(X_scaled)
         return self
     
     def score_samples(self, X):
         """
         Return anomaly scores (higher = more anomalous).
-        Uses Mahalanobis-like distance weighting for better anomaly detection.
+        IsolationForest.score_samples returns negative scores where more negative = more anomalous.
+        We negate to get positive scores where higher = more anomalous.
         """
         X_scaled = self.scaler.transform(X)
-        
-        # Get base isolation forest scores
-        iso_scores = -self.model.score_samples(X_scaled)
-        
-        # Apply variance-weighted distance calculation for better discrimination
-        # This helps detect anomalies even when training data has low variance
-        feature_means = self.scaler.mean_
-        weighted_distances = []
-        
-        for sample in X_scaled:
-            # Calculate weighted Euclidean distance using feature variance
-            distances = np.abs(sample - feature_means)
-            # Add small epsilon to prevent division by zero
-            variance_weights = 1.0 / (self.feature_variance + 1e-8)
-            # Normalize weights
-            variance_weights = variance_weights / np.sum(variance_weights)
-            weighted_distance = np.sum(distances * variance_weights)
-            weighted_distances.append(weighted_distance)
-        
-        weighted_distances = np.array(weighted_distances)
-        
-        # Combine isolation forest score with variance-weighted distance
-        # This gives us better separation for anomalies
-        combined_scores = iso_scores + weighted_distances
-        
-        return combined_scores
+        # IsolationForest returns negative scores (more negative = more anomalous)
+        # Negate to get positive scores (higher = more anomalous)
+        return -self.model.score_samples(X_scaled)
 
 def train_user_model(X_train):
     """
@@ -155,10 +129,9 @@ def train_user_model(X_train):
 
 def calibrate_thresholds(model, X_enroll):
     """
-    Computes low/high risk thresholds using the 50th and 95th percentile of enrollment scores.
-    Score is positive: higher = more anomalous.
-    Medium threshold at 50th percentile allows some natural variation, 
-    high threshold at 95th percentile captures clear anomalies.
+    Computes low/high risk thresholds using the 90th and 99th percentile of enrollment scores.
+    90th percentile = medium risk threshold (allows natural variation)
+    99th percentile = high risk threshold (clear anomalies only)
     """
     if isinstance(X_enroll, pd.DataFrame):
         X_enroll_vals = X_enroll[FEATURE_NAMES].values
@@ -167,16 +140,9 @@ def calibrate_thresholds(model, X_enroll):
         
     anomaly_scores = model.score_samples(X_enroll_vals)
     
-    # Use 50th and 95th percentiles to create meaningful thresholds
-    # even when enrollment data has low variance
-    low_cut = np.percentile(anomaly_scores, 50)
-    high_cut = np.percentile(anomaly_scores, 95)
-    
-    # Ensure thresholds are actually different
-    if np.isclose(low_cut, high_cut):
-        # If scores are too similar, add a small offset to create separation
-        offset = max(abs(low_cut) * 0.1, 0.01)
-        high_cut = low_cut + offset
+    # 90th and 99th percentiles - stricter than before
+    low_cut = np.percentile(anomaly_scores, 90)
+    high_cut = np.percentile(anomaly_scores, 99)
     
     return low_cut, high_cut
 

@@ -11,23 +11,23 @@ Selected window size: 50 (best EER)
 
 --- Takeover Simulation (User p001 model vs User p002 attacker) ---
 Spliced windows: 5 genuine, 10 attacker
-Window 00 (Genuine): score=0.4473, risk=MEDIUM, hijacked=False, primary_driver=dwell_mean
-Window 01 (Genuine): score=0.5120, risk=MEDIUM, hijacked=False, primary_driver=flight_std
-Window 02 (Genuine): score=0.5762, risk=MEDIUM, hijacked=True, primary_driver=typing_speed
+Window 00 (Genuine): score=0.4473, risk=LOW   , hijacked=False, primary_driver=None
+Window 01 (Genuine): score=0.5120, risk=LOW   , hijacked=False, primary_driver=None
+Window 02 (Genuine): score=0.5762, risk=MEDIUM, hijacked=False, primary_driver=typing_speed
 Window 03 (Genuine): score=0.4241, risk=LOW   , hijacked=False, primary_driver=None
 Window 04 (Genuine): score=0.3950, risk=LOW   , hijacked=False, primary_driver=None
-Window 05 (Attacker): score=0.5822, risk=HIGH  , hijacked=False, primary_driver=typing_speed
+Window 05 (Attacker): score=0.5822, risk=MEDIUM, hijacked=False, primary_driver=typing_speed
 Window 06 (Attacker): score=0.6149, risk=HIGH  , hijacked=False, primary_driver=typing_speed
 Window 07 (Attacker): score=0.6149, risk=HIGH  , hijacked=True, primary_driver=typing_speed
 Window 08 (Attacker): score=0.6149, risk=HIGH  , hijacked=True, primary_driver=typing_speed
 Window 09 (Attacker): score=0.6149, risk=HIGH  , hijacked=True, primary_driver=typing_speed
 Window 10 (Attacker): score=0.6035, risk=HIGH  , hijacked=True, primary_driver=typing_speed
-Window 11 (Attacker): score=0.5557, risk=MEDIUM, hijacked=True, primary_driver=typing_speed
-Window 12 (Attacker): score=0.6149, risk=HIGH  , hijacked=True, primary_driver=typing_speed
-Window 13 (Attacker): score=0.6071, risk=HIGH  , hijacked=True, primary_driver=typing_speed
+Window 11 (Attacker): score=0.5557, risk=LOW   , hijacked=False, primary_driver=None
+Window 12 (Attacker): score=0.6149, risk=HIGH  , hijacked=False, primary_driver=typing_speed
+Window 13 (Attacker): score=0.6071, risk=HIGH  , hijacked=False, primary_driver=typing_speed
 Window 14 (Attacker): score=0.6149, risk=HIGH  , hijacked=True, primary_driver=typing_speed
 
-Takeover detection status: SUCCESS (Triggered at window 2, lag=-3 windows)
+Takeover detection status: SUCCESS (Triggered at window 7, lag=2 windows)
 
 --- Cross-User Population Metrics (10 Users) ---
 Total genuine test windows evaluated: 325
@@ -39,5 +39,5 @@ OneClassSVM - Equal Error Rate (EER): 31.86% at threshold = -0.0063
 Best model: IsolationForest (lower EER is better)
 
 IsolationForest Performance at Calibrated Thresholds:
-FAR/FRR at low_cut threshold (0.4256): FAR=4.82%, FRR=56.00%
-FAR/FRR at high_cut threshold (0.5383): FAR=40.62%, FRR=12.92%
+FAR/FRR at low_cut threshold (0.5124): FAR=29.30%, FRR=20.62%
+FAR/FRR at high_cut threshold (0.5653): FAR=53.20%, FRR=10.46%

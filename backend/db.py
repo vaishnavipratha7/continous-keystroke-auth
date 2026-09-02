@@ -16,6 +16,7 @@ users_col = db["users"]
 keystroke_events_col = db["keystroke_events"]
 user_models_col = db["user_models"]
 session_scores_col = db["session_scores"]
+session_summaries_col = db["session_summaries"]
 
 def get_user_by_username(username):
     return users_col.find_one({"username": username})

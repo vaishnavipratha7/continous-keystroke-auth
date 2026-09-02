@@ -2,7 +2,7 @@ import os
 import sys
 import pickle
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 import pandas as pd
 
@@ -20,6 +20,7 @@ from backend.db import (
     keystroke_events_col,
     user_models_col,
     session_scores_col,
+    session_summaries_col,
     get_user_by_username
 )
 from backend.auth import (
@@ -568,34 +569,197 @@ async def session_explain(session_id: str, window_index: int, user_id: str = Dep
 @app.get("/session/history")
 async def session_history(user_id: str = Depends(get_current_user_id)):
     """
-    Returns a list of past sessions for the current user.
-    Each entry includes: session_id, start_time, end_time, final_risk_status, window_count.
+    Returns a list of past sessions for the current user with comprehensive details.
+    Each entry includes: session_id, start_time, end_time, final_risk_status, window_count, model_retrained.
     """
-    # Find all unique session_ids for this user
-    pipeline = [
-        {"$match": {"user_id": user_id}},
-        {"$group": {
-            "_id": "$session_id",
-            "window_count": {"$sum": 1},
-            "start_time": {"$min": "$timestamp"},
-            "end_time": {"$max": "$timestamp"},
-            "scores": {"$push": {"window_index": "$window_index", "risk_level": "$risk_level"}}
-        }},
-        {"$sort": {"end_time": -1}}
-    ]
-    
-    sessions = list(session_scores_col.aggregate(pipeline))
-    
-    result = []
-    for sess in sessions:
-        session_id = sess["_id"]
+    try:
+        # Try to get from session_summaries collection first (has more details)
+        summaries = list(session_summaries_col.find(
+            {"user_id": user_id}
+        ).sort("end_time", -1).limit(50))
         
-        # Determine final risk status using consecutive-window logic
-        scores = sorted(sess["scores"], key=lambda x: x["window_index"])
+        if summaries:
+            result = []
+            for summary in summaries:
+                duration_seconds = 0
+                if summary.get("start_time") and summary.get("end_time"):
+                    duration_seconds = (summary["end_time"] - summary["start_time"]).total_seconds()
+                
+                result.append({
+                    "session_id": summary["session_id"],
+                    "start_time": summary["start_time"].isoformat() if summary.get("start_time") else None,
+                    "end_time": summary["end_time"].isoformat() if summary.get("end_time") else None,
+                    "duration_seconds": duration_seconds,
+                    "duration_formatted": f"{int(duration_seconds // 60)}m {int(duration_seconds % 60)}s",
+                    "final_risk_status": summary.get("final_risk", "unknown"),
+                    "window_count": summary.get("total_windows", 0),
+                    "low_count": summary.get("low_count", 0),
+                    "medium_count": summary.get("medium_count", 0),
+                    "high_count": summary.get("high_count", 0),
+                    "was_flagged": summary.get("was_flagged", False),
+                    "model_retrained": summary.get("model_retrained", False)
+                })
+            return {"sessions": result}
+        
+        # Fallback to aggregating from session_scores if no summaries
+        pipeline = [
+            {"$match": {"user_id": user_id}},
+            {"$group": {
+                "_id": "$session_id",
+                "window_count": {"$sum": 1},
+                "start_time": {"$min": "$timestamp"},
+                "end_time": {"$max": "$timestamp"},
+                "scores": {"$push": {"window_index": "$window_index", "risk_level": "$risk_level"}}
+            }},
+            {"$sort": {"end_time": -1}},
+            {"$limit": 50}
+        ]
+        
+        sessions = list(session_scores_col.aggregate(pipeline))
+        
+        result = []
+        for sess in sessions:
+            session_id = sess["_id"]
+            
+            # Determine final risk status using consecutive-window logic
+            scores = sorted(sess["scores"], key=lambda x: x["window_index"])
+            consecutive_hijack_count = 0
+            flagged = False
+            low_count = medium_count = high_count = 0
+            
+            for s in scores:
+                if s["risk_level"] == "low":
+                    low_count += 1
+                elif s["risk_level"] == "medium":
+                    medium_count += 1
+                elif s["risk_level"] == "high":
+                    high_count += 1
+                    
+                if s["risk_level"] in ["medium", "high"]:
+                    consecutive_hijack_count += 1
+                else:
+                    consecutive_hijack_count = 0
+                    
+                if consecutive_hijack_count >= 3:
+                    flagged = True
+                    break
+            
+            final_risk = "flagged" if flagged else (scores[-1]["risk_level"] if scores else "unknown")
+            
+            duration_seconds = 0
+            if sess.get("start_time") and sess.get("end_time"):
+                duration_seconds = (sess["end_time"] - sess["start_time"]).total_seconds()
+            
+            result.append({
+                "session_id": session_id,
+                "start_time": sess["start_time"].isoformat() if sess.get("start_time") else None,
+                "end_time": sess["end_time"].isoformat() if sess.get("end_time") else None,
+                "duration_seconds": duration_seconds,
+                "duration_formatted": f"{int(duration_seconds // 60)}m {int(duration_seconds % 60)}s",
+                "final_risk_status": final_risk,
+                "window_count": sess["window_count"],
+                "low_count": low_count,
+                "medium_count": medium_count,
+                "high_count": high_count,
+                "was_flagged": flagged,
+                "model_retrained": False
+            })
+        
+        return {"sessions": result}
+    except Exception as e:
+        logger.error(f"Error fetching session history for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch session history")
+
+
+@app.get("/user/stats")
+async def user_stats(user_id: str = Depends(get_current_user_id)):
+    """
+    Returns aggregate statistics for the current user including:
+    - Total sessions
+    - Total windows analyzed
+    - Safe vs flagged session ratio
+    - Model training info
+    - Enrollment completion status
+    """
+    try:
+        # Get model info
+        model_doc = user_models_col.find_one({"user_id": user_id})
+        enrollment_complete = model_doc is not None
+        model_last_trained = None
+        total_training_windows = 0
+        
+        if model_doc:
+            model_last_trained = model_doc.get("updated_at")
+            if model_last_trained:
+                model_last_trained = datetime.fromtimestamp(model_last_trained).isoformat()
+            enrollment_features = model_doc.get("enrollment_features", [])
+            total_training_windows = len(enrollment_features)
+        
+        # Get session summaries
+        summaries = list(session_summaries_col.find({"user_id": user_id}))
+        
+        total_sessions = len(summaries)
+        safe_sessions = sum(1 for s in summaries if not s.get("was_flagged", False))
+        flagged_sessions = sum(1 for s in summaries if s.get("was_flagged", False))
+        total_windows = sum(s.get("total_windows", 0) for s in summaries)
+        times_retrained = sum(1 for s in summaries if s.get("model_retrained", False))
+        
+        # Calculate average session duration
+        durations = []
+        for s in summaries:
+            if s.get("start_time") and s.get("end_time"):
+                duration = (s["end_time"] - s["start_time"]).total_seconds()
+                durations.append(duration)
+        
+        avg_duration = sum(durations) / len(durations) if durations else 0
+        
+        # Get recent activity (last 7 days)
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        recent_sessions = sum(1 for s in summaries if s.get("end_time", datetime.min) > seven_days_ago)
+        
+        return {
+            "enrollment_complete": enrollment_complete,
+            "model_last_trained": model_last_trained,
+            "total_training_windows": total_training_windows,
+            "total_sessions": total_sessions,
+            "safe_sessions": safe_sessions,
+            "flagged_sessions": flagged_sessions,
+            "total_windows_analyzed": total_windows,
+            "times_model_retrained": times_retrained,
+            "average_session_duration": f"{int(avg_duration // 60)}m {int(avg_duration % 60)}s",
+            "recent_activity_7days": recent_sessions
+        }
+    except Exception as e:
+        logger.error(f"Error fetching user stats for {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch user statistics")
+
+@app.post("/session/end")
+async def end_session(session_id: str, user_id: str = Depends(get_current_user_id)):
+    """
+    POST /session/end - Handles adaptive learning when the session finishes and stores session summary.
+    If all windows in the session were low risk, add them to enrollment set and retrain.
+    """
+    try:
+        scores = list(session_scores_col.find({
+            "user_id": user_id,
+            "session_id": session_id
+        }).sort("window_index", 1))
+        
+        if not scores:
+            return {"message": "Session ended. No scores logged.", "model_retrained": False}
+        
+        # Calculate statistics
+        total_windows = len(scores)
+        low_count = sum(1 for s in scores if s["risk_level"] == "low")
+        medium_count = sum(1 for s in scores if s["risk_level"] == "medium")
+        high_count = sum(1 for s in scores if s["risk_level"] == "high")
+        
+        # Determine if hijacked using same consecutive window logic
         consecutive_hijack_count = 0
         flagged = False
         
-        for s in scores:
+        sorted_scores = sorted(scores, key=lambda x: x.get("window_index", 0))
+        for s in sorted_scores:
             if s["risk_level"] in ["medium", "high"]:
                 consecutive_hijack_count += 1
             else:
@@ -604,107 +768,114 @@ async def session_history(user_id: str = Depends(get_current_user_id)):
             if consecutive_hijack_count >= 3:
                 flagged = True
                 break
-        
+                
+        is_safe = not flagged
         final_risk = "flagged" if flagged else (scores[-1]["risk_level"] if scores else "unknown")
         
-        result.append({
-            "session_id": session_id,
-            "start_time": sess["start_time"].isoformat() if sess["start_time"] else None,
-            "end_time": sess["end_time"].isoformat() if sess["end_time"] else None,
-            "final_risk_status": final_risk,
-            "window_count": sess["window_count"]
-        })
-    
-    return {"sessions": result}
-
-@app.post("/session/end")
-async def end_session(session_id: str, user_id: str = Depends(get_current_user_id)):
-    """
-    POST /session/end - Handles adaptive learning when the session finishes.
-    If all windows in the session were low risk, add them to enrollment set and retrain.
-    """
-    scores = list(session_scores_col.find({
-        "user_id": user_id,
-        "session_id": session_id
-    }))
-    
-    if not scores:
-        return {"message": "Session ended. No scores logged."}
+        # Store session summary
+        start_time = scores[0].get("timestamp", datetime.utcnow())
+        end_time = scores[-1].get("timestamp", datetime.utcnow())
         
-    # Determine if hijacked using same consecutive window logic
-    consecutive_hijack_count = 0
-    flagged = False
-    
-    # Sort scores by window_index to ensure chronological sequence
-    sorted_scores = sorted(scores, key=lambda x: x.get("window_index", 0))
-    for s in sorted_scores:
-        if s["risk_level"] in ["medium", "high"]:
-            consecutive_hijack_count += 1
-        else:
-            consecutive_hijack_count = 0
-            
-        if consecutive_hijack_count >= 3:
-            flagged = True
-            break
-            
-    is_safe = not flagged
-    
-    retrained = False
-    if is_safe:
-        print(f"Session {session_id} was safe (no hijacking detected). Triggering adaptive learning...")
-        # Get user model details
-        model_doc = user_models_col.find_one({"user_id": user_id})
-        if model_doc:
-            # Reconstruct window features from this session
-            session_events = list(keystroke_events_col.find({
-                "user_id": user_id,
-                "session_id": session_id,
-                "type": "session"
-            }).sort("down_time", 1))
-            
-            events_df = pd.DataFrame([{
-                "key": ev["key"],
-                "down_time": ev["down_time"],
-                "up_time": ev["up_time"]
-            } for ev in session_events])
-            
-            digraphs_df = extract_digraphs(events_df)
-            session_windows = compute_windows(digraphs_df)
-            
-            if len(session_windows) > 0:
-                enrollment_features = model_doc.get("enrollment_features", [])
+        retrained = False
+        if is_safe:
+            logger.info(f"Session {session_id} was safe (no hijacking detected). Triggering adaptive learning...")
+            # Get user model details
+            model_doc = user_models_col.find_one({"user_id": user_id})
+            if model_doc:
+                # Reconstruct window features from this session
+                session_events = list(keystroke_events_col.find({
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "type": "session"
+                }).sort("down_time", 1))
                 
-                # Combine existing enrollment and new session windows
-                combined = enrollment_features + session_windows[FEATURE_NAMES].to_dict('records')
-                # Cap at the most recent 500 windows
-                combined = combined[-500:]
-                
-                # Retrain model
-                X_train = pd.DataFrame(combined)
-                model = train_user_model(X_train)
-                low_cut, high_cut = calibrate_thresholds(model, X_train)
-                
-                if low_cut >= high_cut:
-                    high_cut = low_cut + 0.01
+                if len(session_events) > 0:
+                    events_df = pd.DataFrame([{
+                        "key": ev["key"],
+                        "down_time": ev["down_time"],
+                        "up_time": ev["up_time"]
+                    } for ev in session_events])
                     
-                # Save retrained model
-                model_bytes = pickle.dumps(model)
-                user_models_col.update_one(
-                    {"user_id": user_id},
-                    {
-                        "$set": {
-                            "model_binary": bson.Binary(model_bytes),
-                            "low_cut": float(low_cut),
-                            "high_cut": float(high_cut),
-                            "updated_at": time.time(),
-                            "enrollment_features": combined
-                        }
-                    }
-                )
-                retrained = True
-                
-    return {
-        "message": "Session ended successfully.",
-        "adaptive_learning_triggered": is_safe,
-        "model_retrained": retrained
-    }
+                    digraphs_df = extract_digraphs(events_df)
+                    session_windows = compute_windows(digraphs_df)
+                    
+                    if len(session_windows) > 0:
+                        enrollment_features = model_doc.get("enrollment_features", [])
+                        
+                        # Combine existing enrollment and new session windows
+                        combined = enrollment_features + session_windows[FEATURE_NAMES].to_dict('records')
+                        # Cap at the most recent 500 windows
+                        combined = combined[-500:]
+                        
+                        # Retrain model
+                        X_train = pd.DataFrame(combined)
+                        model = train_user_model(X_train)
+                        low_cut, high_cut = calibrate_thresholds(model, X_train)
+                        
+                        if low_cut >= high_cut:
+                            high_cut = low_cut + 0.01
+                            
+                        # Save retrained model
+                        model_bytes = pickle.dumps(model)
+                        user_models_col.update_one(
+                            {"user_id": user_id},
+                            {
+                                "$set": {
+                                    "model_binary": bson.Binary(model_bytes),
+                                    "low_cut": float(low_cut),
+                                    "high_cut": float(high_cut),
+                                    "updated_at": time.time(),
+                                    "enrollment_features": combined
+                                }
+                            }
+                        )
+                        retrained = True
+                        logger.info(f"Model retrained for user {user_id} after safe session")
+        
+        # Store comprehensive session summary
+        session_summary = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "start_time": start_time,
+            "end_time": end_time,
+            "total_windows": total_windows,
+            "low_count": low_count,
+            "medium_count": medium_count,
+            "high_count": high_count,
+            "final_risk": final_risk,
+            "was_flagged": flagged,
+            "model_retrained": retrained,
+            "created_at": datetime.utcnow()
+        }
+        
+        session_summaries_col.insert_one(session_summary)
+        
+        return {
+            "message": "Session ended successfully.",
+            "adaptive_learning_triggered": is_safe,
+            "model_retrained": retrained,
+            "session_summary": {
+                "total_windows": total_windows,
+                "low_count": low_count,
+                "medium_count": medium_count,
+                "high_count": high_count,
+                "final_risk": final_risk,
+                "was_flagged": flagged
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error ending session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to end session")
+
+
+# Run the server
+if __name__ == "__main__":
+    import uvicorn
+    logger.info("Starting Continuous Keystroke Authentication Backend API...")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )

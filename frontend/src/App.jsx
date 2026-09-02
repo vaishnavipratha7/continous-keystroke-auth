@@ -591,7 +591,7 @@ function EnrollmentView({ token, setPage, setError }) {
     }
     
     setLoading(true);
-    setProgressMsg("Uploading your typing data to the server...");
+    setProgressMsg("📤 Uploading your typing data to the server...");
     
     try {
       // 1. Submit raw events
@@ -610,7 +610,7 @@ function EnrollmentView({ token, setPage, setError }) {
       }
       
       // 2. Train model
-      setProgressMsg("Building your unique biometric signature...");
+      setProgressMsg("🧠 Building your unique biometric signature...");
       const trainRes = await fetch(`${API_BASE}/enroll/train`, {
         method: 'POST',
         headers: {
@@ -623,7 +623,7 @@ function EnrollmentView({ token, setPage, setError }) {
         throw new Error(trainData.detail || "Failed to train biometric model. Please type more naturally.");
       }
       
-      setProgressMsg("Success! Your typing signature is ready.");
+      setProgressMsg("✅ Success! Your typing signature is ready.");
       setTimeout(() => {
         setPage('session');
       }, 1500);
@@ -631,6 +631,7 @@ function EnrollmentView({ token, setPage, setError }) {
     } catch (err) {
       setError(err.message);
       setLoading(false);
+      setProgressMsg('');
     }
   };
 
@@ -761,10 +762,38 @@ function SessionView({ token, username, setError, setConnectionError }) {
   const [isIdle, setIsIdle] = useState(false);
   const [sessionRiskData, setSessionRiskData] = useState({ action_required: "ALLOW_ACCESS" });
   const [userMfaPin] = useState(() => localStorage.getItem('mfaPin') || '0000'); // Get MFA PIN once on mount
+  const [sessionStartTime] = useState(() => Date.now());
+  const [sessionDuration, setSessionDuration] = useState(0);
+  const [riskTrend, setRiskTrend] = useState('stable'); // 'improving', 'stable', 'worsening'
   
   const localQueueRef = useRef([]);
   const pressedKeysRef = useRef({});
   const lastKeystrokeTimeRef = useRef(Date.now());
+  
+  // Session timer
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setSessionDuration(Math.floor((Date.now() - sessionStartTime) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [sessionStartTime]);
+  
+  // Calculate risk trend based on last 3 windows
+  useEffect(() => {
+    if (scoreHistory.length >= 3) {
+      const last3 = scoreHistory.slice(-3);
+      const riskValues = { low: 0, medium: 1, high: 2 };
+      const risks = last3.map(s => riskValues[s.risk_level] || 0);
+      
+      if (risks[2] < risks[0]) {
+        setRiskTrend('improving');
+      } else if (risks[2] > risks[0]) {
+        setRiskTrend('worsening');
+      } else {
+        setRiskTrend('stable');
+      }
+    }
+  }, [scoreHistory]);
   
   // Reset consecutive window buffer after MFA success
   const handleMFASuccess = async () => {
@@ -1196,6 +1225,31 @@ function SessionView({ token, username, setError, setConnectionError }) {
   return (
     <div className="dashboard-grid fade-in">
       
+      {/* First-time user helpful tip */}
+      {scoreHistory.length === 0 && totalEvents < 50 && riskState === 'initializing' && (
+        <div style={{
+          gridColumn: '1 / -1',
+          background: 'rgba(99, 102, 241, 0.1)',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+          borderRadius: '12px',
+          padding: '16px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px'
+        }} className="fade-in">
+          <div style={{ fontSize: '2rem' }}>💡</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--color-primary)', marginBottom: '4px' }}>
+              Getting Started
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', lineHeight: '1.5' }}>
+              Start typing in the text area below to begin continuous authentication. Your typing is analyzed every ~50 keystrokes.
+              Complete 3+ sessions to improve model accuracy over time through adaptive learning.
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* MFA Challenge or Termination Notice */}
       {(sessionRiskData.action_required === "PROMPT_MFA_CHALLENGE" || sessionRiskData.action_required === "TERMINATE_SESSION") && (
         <div style={{ gridColumn: '1 / -1' }}>
@@ -1338,8 +1392,45 @@ function SessionView({ token, username, setError, setConnectionError }) {
             {statusLabel.explanation}
           </p>
           
+          {/* Risk Trend Indicator */}
+          {scoreHistory.length >= 3 && riskState !== 'flagged' && (
+            <div style={{ 
+              marginTop: 'var(--space-md)', 
+              marginBottom: 'var(--space-sm)',
+              padding: '8px 16px',
+              background: 'rgba(0,0,0,0.2)',
+              borderRadius: '8px',
+              display: 'inline-block'
+            }}>
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Risk Trend:{' '}
+              </span>
+              <span style={{ 
+                fontSize: 'var(--text-sm)', 
+                fontWeight: 600,
+                color: riskTrend === 'improving' ? 'var(--color-secure)' : 
+                       riskTrend === 'worsening' ? 'var(--color-danger)' : 
+                       'var(--color-text-main)'
+              }}>
+                {riskTrend === 'improving' && '↓ Improving'}
+                {riskTrend === 'worsening' && '↑ Worsening'}
+                {riskTrend === 'stable' && '→ Stable'}
+              </span>
+            </div>
+          )}
+          
+          {/* Session Timer */}
+          <div style={{ marginTop: 'var(--space-md)' }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+              Session Duration
+            </div>
+            <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--color-primary)', fontVariantNumeric: 'tabular-nums' }}>
+              {Math.floor(sessionDuration / 60)}:{String(sessionDuration % 60).padStart(2, '0')}
+            </div>
+          </div>
+          
           {/* Secondary metadata */}
-          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginTop: 'var(--space-sm)' }}>
             {scoreHistory.length > 0 ? `${scoreHistory.length} windows analyzed` : 'Starting analysis...'}
           </p>
         </div>
@@ -1591,10 +1682,14 @@ function SessionView({ token, username, setError, setConnectionError }) {
 // HISTORY VIEW
 function HistoryView({ token, setError, setConnectionError }) {
   const [sessions, setSessions] = useState([]);
+  const [userStats, setUserStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [selectedSession, setSelectedSession] = useState(null);
 
   useEffect(() => {
     fetchHistory();
+    fetchUserStats();
   }, []);
 
   const fetchHistory = async () => {
@@ -1613,71 +1708,325 @@ function HistoryView({ token, setError, setConnectionError }) {
     }
   };
 
+  const fetchUserStats = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/user/stats`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to load user statistics');
+      const data = await res.json();
+      setUserStats(data);
+    } catch (err) {
+      console.error('Failed to fetch user stats:', err);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
   return (
-    <div style={{ maxWidth: '900px', margin: 'var(--space-2xl) auto', padding: '0 var(--space-lg)' }} className="fade-in">
+    <div style={{ maxWidth: '1200px', margin: 'var(--space-2xl) auto', padding: '0 var(--space-lg)' }} className="fade-in">
+      
+      {/* User Statistics Dashboard */}
+      {!statsLoading && userStats && (
+        <div style={{ marginBottom: 'var(--space-2xl)' }}>
+          <h2 style={{ fontSize: 'var(--text-2xl)', marginBottom: 'var(--space-lg)', fontWeight: 700 }}>
+            Dashboard Overview
+          </h2>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-lg)', marginBottom: 'var(--space-2xl)' }}>
+            {/* Total Sessions Card */}
+            <div className="glass-panel" style={{ padding: 'var(--space-lg)', textAlign: 'center' }}>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                Total Sessions
+              </div>
+              <div style={{ fontSize: '2.5rem', fontWeight: 700, color: 'var(--color-primary)' }}>
+                {userStats.total_sessions}
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginTop: 'var(--space-xs)' }}>
+                {userStats.total_windows_analyzed} windows analyzed
+              </div>
+            </div>
+
+            {/* Safe vs Flagged Ratio */}
+            <div className="glass-panel" style={{ padding: 'var(--space-lg)', textAlign: 'center' }}>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                Session Safety
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'baseline', gap: 'var(--space-sm)' }}>
+                <span style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--color-secure)' }}>
+                  {userStats.safe_sessions}
+                </span>
+                <span style={{ fontSize: 'var(--text-lg)', color: 'var(--color-text-muted)' }}>/</span>
+                <span style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--color-danger)' }}>
+                  {userStats.flagged_sessions}
+                </span>
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginTop: 'var(--space-xs)' }}>
+                Safe / Flagged
+              </div>
+            </div>
+
+            {/* Model Training Status */}
+            <div className="glass-panel" style={{ padding: 'var(--space-lg)', textAlign: 'center' }}>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                Model Status
+              </div>
+              <div style={{ 
+                fontSize: '1.25rem', 
+                fontWeight: 700, 
+                color: userStats.enrollment_complete ? 'var(--color-secure)' : 'var(--color-warning)',
+                marginBottom: 'var(--space-xs)'
+              }}>
+                {userStats.enrollment_complete ? '✓ Active' : '⚠ Pending'}
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                Retrained {userStats.times_model_retrained}x
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                {userStats.total_training_windows} training windows
+              </div>
+            </div>
+
+            {/* Recent Activity */}
+            <div className="glass-panel" style={{ padding: 'var(--space-lg)', textAlign: 'center' }}>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                Recent Activity
+              </div>
+              <div style={{ fontSize: '2.5rem', fontWeight: 700, color: 'var(--color-primary)' }}>
+                {userStats.recent_activity_7days}
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginTop: 'var(--space-xs)' }}>
+                sessions (last 7 days)
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Session History Table */}
       <div className="glass-panel" style={{ padding: 'var(--space-xl)' }}>
-        <h2 style={{ fontSize: 'var(--text-3xl)', marginBottom: 'var(--space-md)' }}>Session History</h2>
+        <h2 style={{ fontSize: 'var(--text-2xl)', marginBottom: 'var(--space-md)', fontWeight: 700 }}>Session History</h2>
         <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-base)', marginBottom: 'var(--space-xl)' }}>
-          Review all your past authentication sessions
+          Detailed audit trail of all authentication sessions
         </p>
 
         {loading ? (
           <div style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--color-text-muted)' }}>
+            <div style={{ fontSize: '2rem', marginBottom: 'var(--space-md)' }}>⏳</div>
             Loading history...
           </div>
         ) : sessions.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--color-text-muted)' }}>
-            No sessions yet. Start a session to see it here.
+          <div style={{ textAlign: 'center', padding: 'var(--space-2xl)', color: 'var(--color-text-muted)' }}>
+            <div style={{ fontSize: '3rem', marginBottom: 'var(--space-md)', opacity: 0.5 }}>📋</div>
+            <p>No sessions yet. Start a session to see it here.</p>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
-            {sessions.map((sess, idx) => {
-              const riskColor = sess.final_risk_status === 'low' ? 'var(--color-secure)' :
-                               sess.final_risk_status === 'medium' ? 'var(--color-warning)' :
-                               sess.final_risk_status === 'flagged' || sess.final_risk_status === 'high' ? 'var(--color-danger)' :
-                               'var(--color-text-muted)';
-              
-              return (
-                <div key={idx} className="glass-panel" style={{
-                  padding: 'var(--space-lg)',
-                  borderLeft: `4px solid ${riskColor}`,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <div>
-                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-xs)' }}>
-                      Session ID: <code style={{ color: 'var(--color-text-main)' }}>{sess.session_id.split('_')[0]}</code>
-                    </div>
-                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
-                      {sess.start_time ? new Date(sess.start_time).toLocaleString() : 'Unknown'}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 'var(--space-lg)', alignItems: 'center' }}>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>
-                        Windows
-                      </div>
-                      <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700 }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
+                  <th style={{ padding: 'var(--space-md)', textAlign: 'left', color: 'var(--color-text-muted)', textTransform: 'uppercase', fontSize: 'var(--text-xs)' }}>
+                    Session ID
+                  </th>
+                  <th style={{ padding: 'var(--space-md)', textAlign: 'left', color: 'var(--color-text-muted)', textTransform: 'uppercase', fontSize: 'var(--text-xs)' }}>
+                    Time
+                  </th>
+                  <th style={{ padding: 'var(--space-md)', textAlign: 'center', color: 'var(--color-text-muted)', textTransform: 'uppercase', fontSize: 'var(--text-xs)' }}>
+                    Duration
+                  </th>
+                  <th style={{ padding: 'var(--space-md)', textAlign: 'center', color: 'var(--color-text-muted)', textTransform: 'uppercase', fontSize: 'var(--text-xs)' }}>
+                    Windows
+                  </th>
+                  <th style={{ padding: 'var(--space-md)', textAlign: 'center', color: 'var(--color-text-muted)', textTransform: 'uppercase', fontSize: 'var(--text-xs)' }}>
+                    Risk Breakdown
+                  </th>
+                  <th style={{ padding: 'var(--space-md)', textAlign: 'center', color: 'var(--color-text-muted)', textTransform: 'uppercase', fontSize: 'var(--text-xs)' }}>
+                    Status
+                  </th>
+                  <th style={{ padding: 'var(--space-md)', textAlign: 'center', color: 'var(--color-text-muted)', textTransform: 'uppercase', fontSize: 'var(--text-xs)' }}>
+                    Model
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.map((sess, idx) => {
+                  const riskColor = sess.was_flagged ? 'var(--color-danger)' :
+                                   sess.final_risk_status === 'low' ? 'var(--color-secure)' :
+                                   sess.final_risk_status === 'medium' ? 'var(--color-warning)' :
+                                   sess.final_risk_status === 'high' ? 'var(--color-danger)' :
+                                   'var(--color-text-muted)';
+                  
+                  return (
+                    <tr 
+                      key={idx} 
+                      style={{ 
+                        borderBottom: '1px solid var(--border-color)',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s ease'
+                      }}
+                      onClick={() => setSelectedSession(selectedSession?.session_id === sess.session_id ? null : sess)}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <td style={{ padding: 'var(--space-md)', color: 'var(--color-text-main)' }}>
+                        <code style={{ fontSize: 'var(--text-xs)' }}>{sess.session_id.split('_')[0]}</code>
+                      </td>
+                      <td style={{ padding: 'var(--space-md)', color: 'var(--color-text-muted)' }}>
+                        {sess.start_time ? new Date(sess.start_time).toLocaleString('en-US', {
+                          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                        }) : 'Unknown'}
+                      </td>
+                      <td style={{ padding: 'var(--space-md)', textAlign: 'center', color: 'var(--color-text-main)', fontVariantNumeric: 'tabular-nums' }}>
+                        {sess.duration_formatted || '—'}
+                      </td>
+                      <td style={{ padding: 'var(--space-md)', textAlign: 'center', fontWeight: 600, color: 'var(--color-text-main)' }}>
                         {sess.window_count}
-                      </div>
-                    </div>
-                    <div style={{
-                      padding: '6px 16px',
-                      borderRadius: '20px',
-                      fontSize: 'var(--text-sm)',
-                      fontWeight: 600,
-                      textTransform: 'uppercase',
-                      background: `${riskColor}22`,
-                      color: riskColor,
-                      border: `1px solid ${riskColor}44`
-                    }}>
-                      {sess.final_risk_status}
-                    </div>
-                  </div>
+                      </td>
+                      <td style={{ padding: 'var(--space-md)', textAlign: 'center' }}>
+                        <div style={{ display: 'flex', gap: 'var(--space-xs)', justifyContent: 'center', fontSize: 'var(--text-xs)' }}>
+                          <span style={{ color: 'var(--color-secure)' }}>✓{sess.low_count || 0}</span>
+                          <span style={{ color: 'var(--color-warning)' }}>⚠{sess.medium_count || 0}</span>
+                          <span style={{ color: 'var(--color-danger)' }}>✕{sess.high_count || 0}</span>
+                        </div>
+                      </td>
+                      <td style={{ padding: 'var(--space-md)', textAlign: 'center' }}>
+                        <span style={{
+                          padding: '4px 12px',
+                          borderRadius: '12px',
+                          fontSize: 'var(--text-xs)',
+                          fontWeight: 600,
+                          textTransform: 'uppercase',
+                          background: `${riskColor}22`,
+                          color: riskColor,
+                          border: `1px solid ${riskColor}44`,
+                          display: 'inline-block'
+                        }}>
+                          {sess.was_flagged ? '🚨 Flagged' : sess.final_risk_status}
+                        </span>
+                      </td>
+                      <td style={{ padding: 'var(--space-md)', textAlign: 'center' }}>
+                        {sess.model_retrained ? (
+                          <span style={{ color: 'var(--color-primary)', fontSize: 'var(--text-xs)' }} title="Model was retrained after this session">
+                            🔄 Retrained
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)' }}>—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        
+        {/* Session Detail Expansion */}
+        {selectedSession && (
+          <div style={{ 
+            marginTop: 'var(--space-lg)', 
+            padding: 'var(--space-lg)', 
+            background: 'rgba(99, 102, 241, 0.05)',
+            border: '1px solid rgba(99, 102, 241, 0.2)',
+            borderRadius: '8px'
+          }} className="fade-in">
+            <h3 style={{ fontSize: 'var(--text-lg)', marginBottom: 'var(--space-md)', color: 'var(--color-primary)' }}>
+              Session Details: <code style={{ fontSize: 'var(--text-sm)' }}>{selectedSession.session_id}</code>
+            </h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-md)' }}>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                  Start Time
                 </div>
-              );
-            })}
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-main)' }}>
+                  {selectedSession.start_time ? new Date(selectedSession.start_time).toLocaleString() : 'Unknown'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                  End Time
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-main)' }}>
+                  {selectedSession.end_time ? new Date(selectedSession.end_time).toLocaleString() : 'Unknown'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                  Total Duration
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-main)' }}>
+                  {selectedSession.duration_formatted}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                  Total Windows
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-main)' }}>
+                  {selectedSession.window_count}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                  Low Risk Windows
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-secure)' }}>
+                  {selectedSession.low_count || 0} ✓
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                  Medium Risk Windows
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-warning)' }}>
+                  {selectedSession.medium_count || 0} ⚠
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                  High Risk Windows
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-danger)' }}>
+                  {selectedSession.high_count || 0} ✕
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>
+                  Final Status
+                </div>
+                <div style={{ fontSize: 'var(--text-sm)', color: selectedSession.was_flagged ? 'var(--color-danger)' : 'var(--color-secure)', fontWeight: 600 }}>
+                  {selectedSession.was_flagged ? '🚨 Flagged & Locked' : '✓ Safe'}
+                </div>
+              </div>
+            </div>
+            
+            {selectedSession.was_flagged && (
+              <div style={{ 
+                marginTop: 'var(--space-md)', 
+                padding: 'var(--space-md)', 
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                borderRadius: '6px',
+                fontSize: 'var(--text-sm)',
+                color: 'var(--color-danger)'
+              }}>
+                <strong>⚠ Session Flagged:</strong> Consecutive high-risk windows detected. User verification (MFA) was triggered.
+              </div>
+            )}
+            
+            {selectedSession.model_retrained && (
+              <div style={{ 
+                marginTop: 'var(--space-md)', 
+                padding: 'var(--space-md)', 
+                background: 'rgba(99, 102, 241, 0.1)',
+                border: '1px solid rgba(99, 102, 241, 0.3)',
+                borderRadius: '6px',
+                fontSize: 'var(--text-sm)',
+                color: 'var(--color-primary)'
+              }}>
+                <strong>🔄 Adaptive Learning:</strong> Model was retrained using data from this safe session to improve accuracy.
+              </div>
+            )}
           </div>
         )}
       </div>

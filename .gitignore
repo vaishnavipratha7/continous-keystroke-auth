@@ -41,3 +41,9 @@ Thumbs.db
 
 # Internal documentation (local only)
 docs/
+
+# Local guides and status files (not for GitHub)
+IMPLEMENTATION_SUMMARY.md
+QUICK_TEST_GUIDE.md
+FINAL_STATUS.md
+START_MANUALLY.md

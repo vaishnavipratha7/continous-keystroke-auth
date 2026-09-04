@@ -584,9 +584,9 @@ function EnrollmentView({ token, setPage, setError }) {
   };
 
   const handleEnrollSubmit = async () => {
-    if (events.length < 350) {
-      const remaining = 350 - events.length;
-      setError(`Almost there! Type ${remaining} more keys to complete enrollment (need 350 total for accurate baseline).`);
+    if (events.length < 150) {
+      const remaining = 150 - events.length;
+      setError(`Almost there! Type ${remaining} more keys to complete enrollment (need 150 total for demo).`);
       return;
     }
     
@@ -642,7 +642,7 @@ function EnrollmentView({ token, setPage, setError }) {
     setError('');
   };
 
-  const minKeystrokes = 350;
+  const minKeystrokes = 150;
   const progressPercent = Math.min(100, Math.round((events.length / minKeystrokes) * 100));
 
   return (

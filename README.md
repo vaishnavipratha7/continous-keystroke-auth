@@ -173,8 +173,10 @@ MIT License - See LICENSE file for details.
 
 This project extends the methodology from:
 
-Martins, J.P., Soares, S.C., Pinho, A.J., et al. (2025). Keystroke dynamics for intelligent biometric authentication with machine learning. *Discover Applied Sciences*, 7(34). https://doi.org/10.1007/s42452-025-07449-5
+Martins, J.P., Dias, T., Dias, D., Vitorino, J., Maia, E., & Praça, I. (2025). Keystroke dynamics for intelligent biometric authentication with machine learning. *Discover Applied Sciences*, 7, 992. https://doi.org/10.1007/s42452-025-07449-5
 
-Dataset: Bours, P., & Mondal, S. (2023). A dataset for exploring user authentication through free-text keystroke dynamics. *Neural Computing and Applications*, 35, 16077–16093.
+Dataset:
+
+Dias, T., Vitorino, J., Maia, E., Sousa, O., & Praça, I. (2023). KeyRecs: A keystroke dynamics and typing pattern recognition dataset. *Data in Brief*, 50, 109509. https://doi.org/10.1016/j.dib.2023.109509
 
 

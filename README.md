@@ -23,6 +23,20 @@ This project builds a **continuous** verification layer on top of that gap. This
 - **Adaptive learning** — a session confirmed safe on completion feeds back into the user's model, letting the baseline evolve with natural drift over time.
 - **Explainability** — every flagged window comes with a SHAP-based explanation of which specific behavioral feature (typing speed, key-hold time, inter-key timing) drove the anomaly score.
 
+## Features
+
+- **Per-User Unsupervised Learning**: Each user gets their own Isolation Forest model trained only on their typing data
+- **Real-Time Continuous Monitoring**: Every 50 keystrokes analyzed throughout active sessions
+- **Consecutive Risk Smoothing**: 2 consecutive medium/high windows → MFA challenge, 3+ → session termination
+- **Step-Up Authentication**: PIN-based MFA with bcrypt hashing and rate limiting (5 attempts max)
+- **Adaptive Learning**: Safe sessions retrain the model to accommodate natural behavioral drift
+- **SHAP Explainability**: Feature-level explanations for anomalous predictions
+- **Production-Ready Architecture**:
+  - Session history with comprehensive audit trails
+  - Dashboard analytics (session counts, risk ratios, model training stats)
+  - Database optimization (dedicated session summaries collection)
+  - RESTful API design with JWT authentication
+
 ## Results
 
 Validated on the [KeyRecs](https://doi.org/10.1007/s00521-022-07472-0) free-text dataset (562K+ real keystroke events, 100 participants):
@@ -77,18 +91,20 @@ python scripts/parse_dataset.py
 # 2. Backend
 cd backend
 pip install -r requirements.txt
-cp .env.example .env
-# Edit .env to set MONGO_URI if needed
-uvicorn main:app --reload
+python main.py
 
 # 3. Frontend (new terminal)
 cd frontend
 npm install
-cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:5173` — sign up, enroll by typing the given passage, then watch the live risk dashboard as you type. Use the "Demo: Synthetic Attack" button to simulate a shared-workstation handoff (someone else sits down at your unlocked machine).
+Open `http://localhost:5173` — sign up, enroll by typing the passage (~150 keystrokes for quick demo), then watch the live risk dashboard. Use the "Simulate Shared-Workstation Handoff" button to demonstrate detection.
+
+**Quick Start Script** (Windows):
+```powershell
+.\START_ALL.ps1  # Starts MongoDB, backend, and frontend automatically
+```
 
 ## Reproducing the Results
 
@@ -111,8 +127,54 @@ python scripts/test_e2e.py   # full live flow: signup → enroll → session →
 
 ## What This Project Deliberately Does *Not* Claim
 
-- The **synthetic attack demo button** in the UI injects artificial extreme timing values to demonstrate the live UI reacting to a simulated shared-workstation handoff — it is not the accuracy evidence. The real evidence is `scripts/run_validation.py`'s splice test, which uses two real participants' actual recorded typing.
-- **A 24.43% EER means this prototype is not yet accurate enough for production deployment without further tuning or additional behavioral signals** (e.g., mouse dynamics, device fingerprinting) — but it demonstrates the mechanism and validation methodology a production system would need.
-- This extends a published paper's identified limitations as a research/learning exercise; it has not been load-tested, penetration-tested, or deployed for real users.
+- **24.43% EER is prototype-scale accuracy**: Not production-ready without additional behavioral signals (mouse dynamics, device fingerprinting, application context).
+- **Synthetic attack button is UI demonstration**: The real validation evidence is the splice test in `scripts/run_validation.py` using actual participant data.
+- **Limited evaluation scope**: 10 participants, single dataset, one takeover scenario. Larger evaluation needed for production claims.
+- **Adaptive learning can be poisoned**: The bounded-history mechanism reduces risk but doesn't provide complete protection against adversarial model poisoning.
+- **Academic research prototype**: Extends published work for learning purposes; not load-tested, penetration-tested, or deployed at scale.
+
+## Project Structure
+
+```
+continuous-keystroke-auth/
+├── backend/
+│   ├── main.py              # FastAPI application with all endpoints
+│   ├── pipeline.py          # ML pipeline (digraph extraction, windowing, Isolation Forest)
+│   ├── auth.py              # Authentication (bcrypt, JWT tokens, PIN verification)
+│   ├── db.py                # MongoDB connection and collections
+│   └── tests/               # Unit tests for ML pipeline
+├── frontend/
+│   └── src/
+│       └── App.jsx          # React app (enrollment, session monitoring, history, dashboard)
+├── scripts/
+│   ├── download_data.py     # Download KeyRecs dataset from Zenodo
+│   ├── parse_dataset.py     # Reconstruct keystroke events from sessions
+│   ├── run_validation.py    # Full validation: EER, ROC, takeover simulation
+│   └── test_e2e.py          # End-to-end integration test
+├── data/                    # KeyRecs CSV files (gitignored)
+├── docs/figures/            # Generated ROC and takeover detection charts
+└── START_ALL.ps1            # Quick-start script (Windows)
+```
+
+## Future Work
+
+- Evaluate on larger, more diverse user populations
+- Incorporate multimodal signals (mouse dynamics, application behavior)
+- Implement poison-resistant adaptive learning mechanisms
+- Conduct formal security audit and penetration testing
+- Study threshold calibration strategies
+- Address privacy considerations and compliance requirements
+
+## License
+
+MIT License - See LICENSE file for details.
+
+## Citation
+
+This project extends the methodology from:
+
+Martins, J.P., Soares, S.C., Pinho, A.J., et al. (2025). Keystroke dynamics for intelligent biometric authentication with machine learning. *Discover Applied Sciences*, 7(34). https://doi.org/10.1007/s42452-025-07449-5
+
+Dataset: Bours, P., & Mondal, S. (2023). A dataset for exploring user authentication through free-text keystroke dynamics. *Neural Computing and Applications*, 35, 16077–16093.
 
 

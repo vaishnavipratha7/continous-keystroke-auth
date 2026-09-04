@@ -26,7 +26,7 @@ THIRD-PARTY LICENSES
 
 KeyRecs Dataset:
 This project uses the KeyRecs free-text keystroke dynamics dataset.
-Citation: Bours, P., Mondal, S. (2023). A dataset for exploring user authentication through 
-free-text keystroke dynamics. Neural Comput & Applic 35, 16077–16093.
-https://doi.org/10.1007/s00521-022-07472-0
+Citation: Dias, T., Vitorino, J., Maia, E., Sousa, O., & Praça, I. (2023). KeyRecs: A keystroke
+dynamics and typing pattern recognition dataset. Data in Brief, 50, 109509.
+https://doi.org/10.1016/j.dib.2023.109509
 License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)

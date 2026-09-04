@@ -214,11 +214,11 @@ async def enroll_train(user_id: str = Depends(get_current_user_id)):
     events = list(keystroke_events_col.find({"user_id": user_id, "type": "enrollment"}).sort("down_time", 1))
     logger.info(f"Found {len(events)} enrollment events for user {user_id}")
     
-    if len(events) < 350:
-        logger.warning(f"Insufficient events for user {user_id}: {len(events)}/350")
+    if len(events) < 150:
+        logger.warning(f"Insufficient events for user {user_id}: {len(events)}/150")
         raise HTTPException(
             status_code=400, 
-            detail=f"Insufficient keystrokes for training. Have {len(events)}, need at least 350."
+            detail=f"Insufficient keystrokes for training. Have {len(events)}, need at least 150."
         )
         
     # Convert to DataFrame

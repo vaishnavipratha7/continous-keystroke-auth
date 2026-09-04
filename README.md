@@ -35,7 +35,7 @@ This project builds a **continuous** verification layer on top of that gap. This
   - Session history with comprehensive audit trails
   - Dashboard analytics (session counts, risk ratios, model training stats)
   - Database optimization (dedicated session summaries collection)
-  - RESTful API design with JWT authentication
+  - RESTful API design with bearer token authentication
 
 ## Results
 

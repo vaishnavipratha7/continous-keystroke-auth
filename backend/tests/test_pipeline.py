@@ -148,14 +148,16 @@ def test_calibrate_thresholds():
 
 def test_score_window_anomaly_detection():
     """Test that anomalous windows get higher scores."""
-    # Normal training data
+    # Normal training data with realistic variance (not identical copies)
+    # Real typing has natural variation in timing
+    np.random.seed(42)  # For reproducibility
     normal_data = pd.DataFrame([
         {
-            'dwell_mean': 0.1,
-            'dwell_std': 0.02,
-            'flight_mean': 0.05,
-            'flight_std': 0.01,
-            'typing_speed': 6.0
+            'dwell_mean': 0.1 + np.random.normal(0, 0.01),
+            'dwell_std': 0.02 + np.random.normal(0, 0.005),
+            'flight_mean': 0.05 + np.random.normal(0, 0.005),
+            'flight_std': 0.01 + np.random.normal(0, 0.002),
+            'typing_speed': 6.0 + np.random.normal(0, 0.5)
         }
         for _ in range(30)
     ])
